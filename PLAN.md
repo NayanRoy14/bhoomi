@@ -761,7 +761,10 @@ CREATE TABLE scenes (
     sensor            TEXT,
     acquired_at       TIMESTAMPTZ NOT NULL,
     cloud_cover       REAL,
-    processing_baseline TEXT,                 -- drives §5.3 harmonization
+    processing_baseline TEXT,                 -- recorded, but NOT trusted (§5.3)
+    boa_offset_present BOOLEAN,               -- detected from pixels; ~6 s to compute,
+                                              -- so persist it: it is a property of the
+                                              -- scene, not of the request (§8)
     geometry          GEOMETRY(Polygon, 4326) NOT NULL,
     assets            JSONB NOT NULL,         -- band -> href
     properties        JSONB,
@@ -966,8 +969,52 @@ enforced server-side and returns a specific error.
 | Output retention | 30 days | §6. Nightly cleanup. |
 | Worker memory ceiling | 2 GB RSS | Container limit; OOM → `failed`, not a silent worker death. |
 
-**Memory, not area, is the binding constraint.** Windowed reads keep it bounded; the pixel cap
-is what actually enforces it. Test at the cap before December, not after.
+### Measured 2026-07-30 — the binding constraint is none of the above
+
+`probes/benchmark_pipeline.py`, NDVI over four **non-overlapping** AOIs in tile 45QXF. (An
+earlier version nested them around one centre, so each larger AOI reused GDAL-cached blocks and
+one run finished in 0.1 s. Non-overlapping AOIs model what separate user requests actually cost.)
+
+| AOI km² | Mpixels | seconds | peak RSS |
+|---|---|---|---|
+| 10.5 | 0.10 | 4.0 | 84 MB |
+| 41.9 | 0.42 | 6.3 | 86 MB |
+| 167.7 | 1.68 | 4.7 | 91 MB |
+| **461.8** | **4.62** | **17.2** | **115 MB** |
+
+Fit: **`seconds ≈ 3.2 + 2.8 × Mpixels`**. Cost is dominated by a fixed ~3 s of connection setup
+and COG header reads, not by throughput — which is why the small AOIs look "slow" per pixel.
+
+**Three limits are revealed as non-binding:**
+
+| Limit | Value | Reality at the 500 km² cap |
+|---|---|---|
+| Job timeout | 10 min | job takes **~17 s**; the timeout allows ~21,000 km² |
+| Worker memory | 2 GB | peak **115 MB** at ~6.8 MB/Mpixel |
+| Max output pixels | 50 M | never binds at Sentinel-2 resolution — 500 km² is 5 Mpx at 10 m |
+
+Keep all three: the timeout is a backstop for pathological cases (degraded network, retry
+storms), the memory ceiling turns an OOM into a `failed` status rather than a silent worker
+death, and the pixel cap becomes the operative guard only for finer data — 500 km² of 2.5 m
+imagery would be 80 Mpx. But **stop describing them as the design constraint**, and the earlier
+claim that "memory is the binding constraint" is withdrawn: it is off by more than an order of
+magnitude.
+
+**The actual constraint is output size and egress.** A 500 km² NDVI COG is ~20 MB; storage and
+repeated TiTiler reads are what scale with AOI, not compute. The 500 km² cap stays for V1
+because it keeps outputs small and the 30-day retention affordable — not because anything
+technical prevents raising it. Revisit it against real R2 costs (O4), not against runtime.
+
+**Two concrete numbers this produces:**
+
+1. **`estimated_seconds` (§7.3)** = `3.2 + 2.8 × Mpixels` for a single index; roughly double it
+   for two-date change, plus offset detection if uncached.
+2. **Offset detection costs ~6.0 s per scene** — over a third of a maximum-size job, and more
+   than the entire compute for a small one. It is cached per scene in-process, but it is a
+   property of the scene and must be **persisted in `scenes`** (§6) so it is paid once per scene
+   ever, not once per worker restart.
+
+R6 (worker OOM at the cap) is **closed**: tested at the cap, 115 MB against a 2 GB ceiling.
 
 ---
 
@@ -1230,8 +1277,9 @@ scene selection rather than through arithmetic. `deduplicate_by_acquisition()` n
 scene per acquisition, preferring the newest baseline, and ranks baselines numerically so
 `05.10` correctly outranks `05.09`.
 
-**Still outstanding for this milestone:** benchmark the runtime and use it to set the §8 job
-timeout and the `estimated_seconds` field in §7.3.
+**Benchmark done, 2026-07-30** (`probes/benchmark_pipeline.py`). `seconds ≈ 3.2 + 2.8 ×
+Mpixels`; a maximum-size 500 km² NDVI job takes ~17 s at 115 MB peak RSS. Runtime and memory are
+both non-binding by roughly two orders of magnitude — see §8. **October–November is complete.**
 
 ---
 
@@ -1360,7 +1408,7 @@ an OGC façade over a broken pipeline is a demo that fails under one question.
 | R3 | **Harmonization bug ships silently** | §5.3 regression test in CI from September | **Partially realised already** — the plan's own date-based fallback rule was wrong and would have caused this exact bug. Caught by probing real data on 2026-07-30, not by reasoning. Lesson: verify metadata assumptions against live items, never from documentation alone. |
 | R4 | **January slips** | Not end-to-end by **2027-01-31** | Cut all of P1 immediately. NDVI-only, live, beats four indices in a branch. Move NDWI/NDBI to February. |
 | R5 | **Aug–Nov learning decays with nothing shipped** | Check monthly: is there a public commit? | September's public repo is the mitigation. Enforce it. |
-| R6 | **Worker OOM on large AOIs** | Test at the §8 cap in December, not January | Pixel cap is the real guard. Lower it if testing says so — a smaller working limit is fine. |
+| ~~R6~~ | ~~Worker OOM on large AOIs~~ | ✅ **Closed 2026-07-30** | Tested at the 500 km² cap: **115 MB peak against a 2 GB ceiling**, ~6.8 MB/Mpixel. Runtime 17 s against a 10-minute timeout. The risk was real but the margin is two orders of magnitude; see §8. |
 | R7 | **Minor Project-I collides with December–January** | Known deadline conflict | Aug–Nov are deliberately light for this reason. If it collides anyway, R4 applies. |
 | R8 | **Cost overrun on VPS + storage** | Monthly billing check | ₹700/month cap (O3). R2's zero egress (O4) is the main defence, since TiTiler re-reads COGs continuously. |
 | R9 | **Live demo fails during an interview** | — | §9.3 precomputed pinned demo. Non-negotiable before recording. |

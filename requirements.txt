@@ -11,3 +11,6 @@ pytest>=8.0
 
 # catalogue/ -- geometry for AOI/footprint intersection
 shapely>=2.0
+
+# probes/benchmark_pipeline.py only
+psutil>=5.9
