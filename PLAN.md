@@ -1301,6 +1301,48 @@ schema and alembic migrations · scene metadata caching · structured logging.
 **Exit criterion:** a stranger opens a public URL, draws a polygon over Kolkata, picks a date
 range, and sees real Sentinel-2 footprints. No processing yet — but it is live, and it is real.
 
+### Progress, 2026-07-30 — API and frontend both working locally
+
+| Piece | State |
+|---|---|
+| `GET /health`, `POST /api/v1/scenes/search`, `/docs` | ✅ built, 93 tests |
+| Next.js + MapLibre, polygon draw/edit/clear, live area readout | ✅ built |
+| Date range, cloud slider, scene list, footprints on map | ✅ built |
+| PostGIS caching + alembic | not started |
+| `docker-compose.yml` (D6) | not started |
+| Public deploy | blocked on **O3** (VPS) |
+
+Verified by driving the real UI: drew a 58.3 km² AOI over Rajarhat, searched, got 11 scenes with
+footprints rendered and partial-coverage scenes dashed and labelled.
+
+**The polygon draw is hand-written against MapLibre** rather than using a draw library — about
+150 lines, no version-coupling risk, and V1 needs exactly one polygon. §28 applies.
+
+### Deduplication had to move into the API — and its key was wrong
+
+Using the UI immediately exposed what the API tests had not: the scene list showed the same
+acquisition twice, at baselines 02.14 and 05.00, differing only in cloud cover by 0.1 pp. A user
+choosing between those on cloud percentage is precisely how a Sen2Cor version change ends up
+inside a change-detection result. `deduplicate_by_acquisition()` existed but was only wired into
+`search_best()`, not into search. It now defaults on, with `deduplicate: false` to opt out.
+
+Wiring it up then revealed the key itself was fragile. It keyed on exact timestamp plus bbox, and
+**reprocessed versions can differ by one millisecond**:
+
+```
+S2A_45QXE_20200330_0_L2A   04:52:25.488000Z   baseline 02.14
+S2A_45QXE_20200330_1_L2A   04:52:25.489000Z   baseline 05.00
+S2A_45QXF_20200330_0/1     04:52:10.902000Z   identical -> collapsed correctly
+```
+
+So the 45QXF pair collapsed and the 45QXE pair did not, from the same overpass. The key now uses
+**`grid:code` (`MGRS-45QXE`) and the timestamp truncated to the second** — the MGRS square is
+also a better spatial identifier than bbox, which shifts between reprocessings as nodata masking
+changes. Live result: 22 scenes → 11, all baseline 05.00.
+
+**Both bugs were only visible from the running UI**, not from the API tests, which used fixtures
+with tidy identical timestamps. Real catalogue data is untidy in ways fixtures are not.
+
 ---
 
 ## JANUARY 2027 — Milestone 2: the processing engine

@@ -129,6 +129,39 @@ class TestSceneSearch:
             app.dependency_overrides.clear()
 
 
+class TestDeduplication:
+    """Same acquisition, two baselines -- the user must not choose between them."""
+
+    @pytest.fixture
+    def duplicated(self):
+        return [
+            Scene.from_stac_item(item("S2A_45QXF_20200330_0_L2A", geometry=TILE_45QXF,
+                                      cloud=0.9, baseline="02.14",
+                                      when="2020-03-30T04:42:43Z")),
+            Scene.from_stac_item(item("S2A_45QXF_20200330_1_L2A", geometry=TILE_45QXF,
+                                      cloud=1.0, baseline="05.00",
+                                      when="2020-03-30T04:42:43Z")),
+        ]
+
+    def test_collapses_to_newest_baseline_by_default(self, duplicated):
+        for client in make_client(StubCatalogue(duplicated)):
+            data = client.post("/api/v1/scenes/search", json=body()).json()
+            assert data["count"] == 1
+            assert data["scenes"][0]["processing_baseline"] == "05.00"
+
+    def test_lower_cloud_does_not_win_over_newer_baseline(self, duplicated):
+        """The 02.14 version has less cloud; consistency still matters more."""
+        for client in make_client(StubCatalogue(duplicated)):
+            scene = client.post("/api/v1/scenes/search", json=body()).json()["scenes"][0]
+            assert scene["id"].endswith("_1_L2A")
+
+    def test_can_be_disabled(self, duplicated):
+        for client in make_client(StubCatalogue(duplicated)):
+            data = client.post("/api/v1/scenes/search",
+                               json=body(deduplicate=False)).json()
+            assert data["count"] == 2
+
+
 class TestLimits:
     def test_oversized_aoi_states_size_and_limit(self, client):
         big = {"type": "Polygon", "coordinates": [[

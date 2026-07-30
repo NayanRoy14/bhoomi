@@ -157,12 +157,31 @@ def deduplicate_by_acquisition(scenes: list[Scene]) -> list[Scene]:
     """
     best: dict[tuple, Scene] = {}
     for scene in scenes:
-        # Same instant and same footprint == same acquisition.
-        key = (scene.acquired_at, tuple(round(v, 4) for v in scene.bbox))
+        key = _acquisition_key(scene)
         current = best.get(key)
         if current is None or _baseline_sort_key(scene) > _baseline_sort_key(current):
             best[key] = scene
     return sorted(best.values(), key=lambda s: s.acquired_at, reverse=True)
+
+
+def _acquisition_key(scene: Scene) -> tuple:
+    """Identify one acquisition across reprocessings.
+
+    Measured 2026-07-30: reprocessed versions of the same acquisition can carry
+    timestamps **one millisecond apart** --
+
+        S2A_45QXE_20200330_0_L2A  04:52:25.488000Z
+        S2A_45QXE_20200330_1_L2A  04:52:25.489000Z
+
+    -- so an exact-timestamp key silently fails to collapse them, while the
+    45QXF pair from the same overpass has identical timestamps and does
+    collapse. Truncating to the second absorbs that drift.
+
+    The MGRS grid square is a far better spatial identifier than the bbox, which
+    can shift between reprocessings as nodata masking changes.
+    """
+    grid = scene.properties.get("grid:code") or tuple(round(v, 3) for v in scene.bbox)
+    return (grid, scene.acquired_at.replace(microsecond=0))
 
 
 def _baseline_sort_key(scene: Scene) -> tuple[int, int]:

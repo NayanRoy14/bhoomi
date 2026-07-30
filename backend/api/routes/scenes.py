@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends
 from backend.api import errors, schemas
 from backend.api.deps import get_catalogue
 from catalogue import Catalogue, Scene, SearchQuery
+from catalogue.earthsearch import deduplicate_by_acquisition
 from processing import indices, raster_utils
 
 logger = logging.getLogger(__name__)
@@ -63,9 +64,12 @@ def search_scenes(
         limit=request.limit,
     )
     scenes = catalogue.search(query)
-    logger.info("scene search: %.1f km², %s..%s, cloud<%s -> %d scenes",
+    found = len(scenes)
+    if request.deduplicate:
+        scenes = deduplicate_by_acquisition(scenes)
+    logger.info("scene search: %.1f km², %s..%s, cloud<%s -> %d scenes (%d before dedup)",
                 area_km2, request.start_date, request.end_date,
-                request.max_cloud, len(scenes))
+                request.max_cloud, len(scenes), found)
 
     return schemas.SceneSearchResponse(
         count=len(scenes),

@@ -40,6 +40,12 @@ class SceneSearchRequest(BaseModel):
     max_cloud: float | None = Field(default=None, ge=0, le=100)
     collection: str = "sentinel-2-l2a"
     limit: int = Field(default=MAX_SCENES, ge=1, le=MAX_SCENES)
+    #: Collapse repeat versions of the same acquisition, keeping the newest
+    #: processing baseline. The archive serves e.g. 2020-03-30 over tile 45QXF
+    #: as both _0_ (Sen2Cor 02.14) and _1_ (05.00). Showing both invites the
+    #: user to pick between them on cloud cover, which is how a Sen2Cor version
+    #: change ends up inside a change-detection result (PLAN.md 5.3).
+    deduplicate: bool = True
 
     model_config = {
         "json_schema_extra": {

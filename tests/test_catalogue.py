@@ -32,12 +32,22 @@ TILE_45QXE = {
 }
 
 
+def bbox_of(geometry):
+    """Derive the bbox from the ring, so scenes with different footprints get
+    different bboxes. Deduplication keys on (time, bbox); a hardcoded bbox made
+    two distinct tiles look like one acquisition."""
+    ring = geometry["coordinates"][0]
+    lons = [p[0] for p in ring]
+    lats = [p[1] for p in ring]
+    return [min(lons), min(lats), max(lons), max(lats)]
+
+
 def item(scene_id, geometry=TILE_45QXF, cloud=0.0, baseline="05.00",
          when="2020-03-10T04:42:43Z", assets=("red", "nir", "scl")):
     return {
         "id": scene_id,
         "collection": "sentinel-2-l2a",
-        "bbox": [87.97, 22.51, 89.05, 23.51],
+        "bbox": bbox_of(geometry),
         "geometry": geometry,
         "properties": {
             "datetime": when,
@@ -203,6 +213,29 @@ class TestDeduplication:
             item("b0509", baseline="05.09"),
         )]
         assert deduplicate_by_acquisition(scenes)[0].id == "b0510"
+
+    def test_millisecond_drift_still_collapses(self):
+        """Reprocessed versions can differ by 1 ms -- measured on 45QXE."""
+        from catalogue.earthsearch import deduplicate_by_acquisition
+
+        a = item("S2A_45QXE_20200330_0_L2A", geometry=TILE_45QXE, baseline="02.14",
+                 when="2020-03-30T04:52:25.488000Z")
+        b = item("S2A_45QXE_20200330_1_L2A", geometry=TILE_45QXE, baseline="05.00",
+                 when="2020-03-30T04:52:25.489000Z")
+        a["properties"]["grid:code"] = b["properties"]["grid:code"] = "MGRS-45QXE"
+        kept = deduplicate_by_acquisition([Scene.from_stac_item(a), Scene.from_stac_item(b)])
+        assert [s.id for s in kept] == ["S2A_45QXE_20200330_1_L2A"]
+
+    def test_grid_code_separates_tiles_from_the_same_overpass(self):
+        """Adjacent tiles are seconds apart; grid:code keeps them distinct."""
+        from catalogue.earthsearch import deduplicate_by_acquisition
+
+        a = item("xe", geometry=TILE_45QXE, when="2020-03-30T04:52:25.488000Z")
+        b = item("xf", geometry=TILE_45QXF, when="2020-03-30T04:52:25.488000Z")
+        a["properties"]["grid:code"] = "MGRS-45QXE"
+        b["properties"]["grid:code"] = "MGRS-45QXF"
+        kept = deduplicate_by_acquisition([Scene.from_stac_item(a), Scene.from_stac_item(b)])
+        assert len(kept) == 2
 
     def test_distinct_acquisitions_are_both_kept(self):
         from catalogue.earthsearch import deduplicate_by_acquisition
