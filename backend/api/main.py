@@ -15,6 +15,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.api.errors import catalogue_error_handler
+from backend.api.ratelimit import rate_limit_middleware
 from backend.api.routes import health, scenes
 from catalogue import CatalogueError
 from processing import __version__
@@ -51,6 +52,8 @@ app.add_middleware(
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["Content-Type"],
 )
+
+app.middleware("http")(rate_limit_middleware)
 
 app.add_exception_handler(CatalogueError, catalogue_error_handler)
 

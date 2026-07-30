@@ -50,33 +50,50 @@ export default function SceneList({ scenes, selectedId, onSelect, areaKm2 }: Pro
                 .join(" ")}
               onClick={() => onSelect(scene.id === selectedId ? null : scene.id)}
             >
-              <div className="scene-head">
-                <strong>{formatDate(scene.acquired_at)}</strong>
-                <span className="cloud">
-                  {scene.cloud_cover === null
-                    ? "cloud ?"
-                    : `${scene.cloud_cover.toFixed(1)}% cloud`}
-                </span>
-              </div>
-              <div className="scene-id">{scene.id}</div>
-              <div className="scene-meta">
-                {partial ? (
-                  <span className="warn">
-                    covers {(scene.aoi_coverage * 100).toFixed(0)}% of your area
-                  </span>
-                ) : (
-                  <span className="ok">covers your whole area</span>
+              <div className="scene-body">
+                {scene.thumbnail && (
+                  <img
+                    className="thumb"
+                    src={scene.thumbnail}
+                    alt={`Preview of ${scene.id}`}
+                    loading="lazy"
+                    // A missing preview is cosmetic; hide it rather than
+                    // showing a broken-image icon in every row.
+                    onError={(e) => {
+                      e.currentTarget.style.display = "none";
+                    }}
+                  />
                 )}
-                {scene.processing_baseline && (
-                  <span className="muted"> · baseline {scene.processing_baseline}</span>
-                )}
-              </div>
-              <div className="processes">
-                {scene.available_processes.map((p) => (
-                  <span key={p} className="chip">
-                    {p.toUpperCase()}
-                  </span>
-                ))}
+                <div className="scene-text">
+                  <div className="scene-head">
+                    <strong>{formatDate(scene.acquired_at)}</strong>
+                    <span className="cloud">
+                      {scene.cloud_cover === null
+                        ? "cloud ?"
+                        : `${scene.cloud_cover.toFixed(1)}% cloud`}
+                    </span>
+                  </div>
+                  <div className="scene-id">{scene.id}</div>
+                  <div className="scene-meta">
+                    {partial ? (
+                      <span className="warn">
+                        covers {(scene.aoi_coverage * 100).toFixed(0)}% of your area
+                      </span>
+                    ) : (
+                      <span className="ok">covers your whole area</span>
+                    )}
+                    {scene.processing_baseline && (
+                      <span className="muted"> · baseline {scene.processing_baseline}</span>
+                    )}
+                  </div>
+                  <div className="processes">
+                    {scene.available_processes.map((p) => (
+                      <span key={p} className="chip">
+                        {p.toUpperCase()}
+                      </span>
+                    ))}
+                  </div>
+                </div>
               </div>
             </li>
           );

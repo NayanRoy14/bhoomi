@@ -964,7 +964,7 @@ enforced server-side and returns a specific error.
 | Job timeout | 10 min | Hard kill, status `timed_out`. |
 | Concurrent jobs (global) | 2 | One VPS. Queue the rest — that is what the queue is for. |
 | Concurrent jobs per IP | 1 | Prevents one client monopolising both workers. |
-| Rate limit | 20 jobs / IP / hour | Redis token bucket. |
+| Rate limit | 20 jobs / IP / hour | **Search implemented 2026-07-30** at 120/hour (`backend/api/ratelimit.py`): sliding-window log, in-memory, `Protocol` so Redis drops in for multi-worker. Jobs get the tighter 20/hour budget when they exist. `/health` and `/docs` are exempt — a health check returning 429 reads as an outage and orchestrators restart containers over it. **X-Forwarded-For is ignored unless `BHOOMI_TRUSTED_PROXY_HOPS` says a proxy of ours set it**; honouring it blindly would let any caller reset their own limit with one header. |
 | Max output size | 200 MB | Refuse to write beyond this. |
 | Output retention | 30 days | §6. Nightly cleanup. |
 | Worker memory ceiling | 2 GB RSS | Container limit; OOM → `failed`, not a silent worker death. |

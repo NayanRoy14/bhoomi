@@ -215,6 +215,27 @@ input[type="range"] {
   opacity: 0.72;
 }
 
+.scene-body {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+}
+
+.scene-text {
+  flex: 1;
+  min-width: 0;
+}
+
+.thumb {
+  width: 62px;
+  height: 62px;
+  flex-shrink: 0;
+  object-fit: cover;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+}
+
 .scene-head {
   display: flex;
   justify-content: space-between;
