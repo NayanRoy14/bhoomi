@@ -80,10 +80,19 @@ makes an OGC API – Processes async execution model natural rather than bolted 
 | `examples/` — worked Kolkata analyses | **Working** |
 | FastAPI — `/health`, scene search, `/docs` | **Working** |
 | Next.js + MapLibre — draw, search, results | **Working** |
-| Docker Compose | Written, **not yet run** — no Docker on the dev machine |
-| PostGIS scene caching | Not started |
+| Docker Compose | **Working** — built and run; backend + postgres verified end to end |
+| PostGIS scene caching + alembic | **Working** — write-through on search, 39 tests |
 | Job queue, worker, TiTiler | Not started (January 2027) |
 | OGC API – Processes | Not started (February 2027) |
+
+164 tests. The 16 that need a live PostGIS are skipped unless one is pointed at:
+
+```bash
+docker run -d --rm --name bhoomi-test-pg -p 55432:5432 \
+    -e POSTGRES_PASSWORD=testpw -e POSTGRES_DB=bhoomi_test postgis/postgis:16-3.4
+BHOOMI_TEST_DATABASE_URL=postgresql://postgres:testpw@localhost:55432/bhoomi_test \
+    python -m pytest
+```
 
 ## Running it
 
@@ -137,6 +146,8 @@ backend/      FastAPI -- HTTP and nothing else
   api/routes/     health, scenes
   api/schemas.py  request/response models
   api/errors.py   messages that say what to do about it
+  db/             scene metadata cache; Postgres optional, alembic migrations
+cache.py      per-scene BOA-offset decisions -- JSON file, or the scenes table
 frontend/     Next.js + MapLibre -- AOI drawing, scene browsing
 catalogue/    STAC client -- no web framework, testable without a server
   base.py         Scene, SearchQuery, Catalogue protocol
@@ -151,7 +162,7 @@ processing/   pure raster library -- no web dependencies, importable from a note
   cog.py          COG writing, validation, provenance tags
 examples/     worked analyses over Kolkata
 probes/       measurement scripts -- every empirical claim in PLAN.md is re-runnable
-tests/        93 unit tests, none requiring network
+tests/        164 tests; the 16 PostGIS ones need a container, the rest need nothing
 docs/         data-source notes and the Bhoonidhi access request
 PLAN.md       the full project plan, with a live decisions register
 ```

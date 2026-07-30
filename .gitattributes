@@ -5,6 +5,10 @@
 *.md   text
 *.txt  text
 
+# Must stay LF even when checked out on Windows: these are copied into a Linux
+# image, and a CRLF shebang line becomes `/bin/sh^M: bad interpreter`.
+*.sh   text eol=lf
+
 *.png  binary
 *.jpg  binary
 *.tif  binary

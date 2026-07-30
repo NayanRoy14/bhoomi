@@ -1315,8 +1315,8 @@ range, and sees real Sentinel-2 footprints. No processing yet — but it is live
 | `GET /health`, `POST /api/v1/scenes/search`, `/docs` | ✅ built, 93 tests |
 | Next.js + MapLibre, polygon draw/edit/clear, live area readout | ✅ built |
 | Date range, cloud slider, scene list, footprints on map | ✅ built |
-| PostGIS caching + alembic | not started |
-| `docker-compose.yml` (D6) | not started |
+| `docker-compose.yml` (D6) | ✅ built — backend, frontend, postgres |
+| PostGIS scene cache + alembic | ✅ built, 39 tests (16 against real PostGIS) |
 | Public deploy | blocked on **O3** (VPS) |
 
 Verified by driving the real UI: drew a 58.3 km² AOI over Rajarhat, searched, got 11 scenes with
@@ -1349,6 +1349,68 @@ changes. Live result: 22 scenes → 11, all baseline 05.00.
 
 **Both bugs were only visible from the running UI**, not from the API tests, which used fixtures
 with tidy identical timestamps. Real catalogue data is untidy in ways fixtures are not.
+
+### The scene cache stores scenes by identity, and refuses to answer searches
+
+`scenes` (§6) is now live behind alembic, written through on every search. The tempting second
+feature — answering the *next* search from PostGIS with `ST_Intersects` instead of calling STAC —
+is deliberately not built, and the reason is worth recording because the query looks so
+reasonable.
+
+Knowing the table holds *some* scenes intersecting an AOI is not knowing it holds **all** of
+them. Making that a cache hit needs a ledger of which (bbox, date-range, cloud) windows have
+actually been fetched, plus an expiry policy per window. Without one, a hit silently returns a
+subset, and the failure is invisible in exactly the case that matters most: a user picking the
+two dates for a change-detection pair would be choosing from the scenes that happen to have been
+cached, not the scenes that exist. A missing scene does not look like an error — it looks like a
+date with no imagery. Against a ~1.1 s catalogue query (D9), that is a bad trade. Search-from-
+cache needs the ledger first; it is not a `SELECT` away.
+
+What the cache is *for* is January: `POST /jobs` receives `scene_ids` (§7.3) and the worker must
+turn them into band hrefs. Verified against live Earth Search — 29 scenes searched, 29 rows
+cached, and `store.get(id)` alone rebuilds a Scene whose `href("nir")` is the real S3 COG URL.
+
+**Two things the upsert protects.** `boa_offset_present` appears in neither the INSERT nor the
+UPDATE column list, so a repeat search cannot overwrite a 6-second pixel measurement (§5.3) with
+NULL — the one column here that is expensive and not re-derivable from the catalogue. And the
+footprint column being `GEOMETRY(Polygon, 4326)` means a MultiPolygon footprint is skipped with a
+warning rather than aborting the batch it arrived in.
+
+**Cache writes are allowed to fail quietly** — logged, not raised — because a failed write costs
+latency on a later request and can never change an answer: everything served still comes from the
+catalogue on the same request that wrote it. That is the *opposite* call from §5.3's, where the
+mutable warning was the only signal that a served number was wrong, and the difference between
+the two is the whole distinction. A Postgres outage degrades Bhoomi to its no-database
+configuration, which is supported and tested, rather than taking search down.
+
+### Alembic's `fileConfig` turns off the application's loggers
+
+Caught by two tests that asserted a warning was logged and found `caplog` empty. `fileConfig`
+defaults to `disable_existing_loggers=True`, so running a migration **in-process** silently
+switches off every logger created before it — including `backend.db.scenes`. Harmless in the
+normal path, where alembic is its own process, and invisible until something in-process runs a
+migration and then wonders where its logs went. `env.py` now passes `disable_existing_loggers=False`.
+
+Same shape as the §5.3 lesson: the failure was in the *reporting* channel, so nothing failed
+loudly. Only a test that asserted on the log caught it.
+
+### "Degrades gracefully" was false for 130 seconds
+
+Found by the test suite being slow, not by a failing assertion. The two tests that point the
+store at an unreachable host **passed** — and took 130 s each, turning a 5 s suite into a 4½
+minute one. The cause was not the tests: `create_engine` had no `connect_timeout`, so an
+unreachable database fell back to the OS TCP timeout.
+
+Which means the degradation story in the section above was not true as written. Search *would*
+have survived a Postgres outage, eventually — after every request blocked for two minutes, which
+a user and a load balancer both read as "the API is down". Failing softly is worth nothing if it
+fails slowly; the timeout is what converts an outage of the cache into an outage of only the
+cache. Now 5 s, `BHOOMI_DB_CONNECT_TIMEOUT`, with a test that asserts the failure arrives fast
+rather than merely arriving.
+
+**Worth noticing that a green test suite was the evidence.** Both tests asserted the right
+behaviour and both passed. The only signal was the wall clock — which is exactly the signal that
+gets ignored when a suite is run for its exit code.
 
 ---
 

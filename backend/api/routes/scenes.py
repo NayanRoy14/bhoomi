@@ -7,7 +7,8 @@ import logging
 from fastapi import APIRouter, Depends
 
 from backend.api import errors, schemas
-from backend.api.deps import get_catalogue
+from backend.api.deps import get_catalogue, get_scene_store
+from backend.db import SceneStore
 from catalogue import Catalogue, Scene, SearchQuery
 from catalogue.earthsearch import deduplicate_by_acquisition
 from processing import indices, raster_utils
@@ -34,6 +35,7 @@ def _thumbnail(scene: Scene) -> str | None:
 def search_scenes(
     request: schemas.SceneSearchRequest,
     catalogue: Catalogue = Depends(get_catalogue),
+    store: SceneStore = Depends(get_scene_store),
 ) -> schemas.SceneSearchResponse:
     """Search the catalogue for scenes intersecting the AOI.
 
@@ -70,6 +72,13 @@ def search_scenes(
     logger.info("scene search: %.1f km², %s..%s, cloud<%s -> %d scenes (%d before dedup)",
                 area_km2, request.start_date, request.end_date,
                 request.max_cloud, len(scenes), found)
+
+    # Write-through, so January's POST /jobs can resolve a scene id to its band
+    # hrefs without a second STAC round trip. The deduplicated list, not the raw
+    # one: those are the scenes the UI will offer, so those are the ids that can
+    # come back. This never affects the response -- see backend/db/scenes.py on
+    # why a failure here is logged rather than raised.
+    store.put_many(scenes, catalogue=getattr(catalogue, "name", "earth-search"))
 
     return schemas.SceneSearchResponse(
         count=len(scenes),

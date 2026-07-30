@@ -17,3 +17,11 @@ rio-cogeo>=5.0
 # backend/ -- API layer
 fastapi>=0.115
 uvicorn[standard]>=0.30
+
+# backend/db/ -- scene metadata cache (PLAN.md 6). Required to import the API
+# even when BHOOMI_DATABASE_URL is unset; Postgres itself stays optional, the
+# library does not. psycopg[binary] ships its own libpq, so the image needs no
+# system postgres client package.
+SQLAlchemy>=2.0
+alembic>=1.13
+psycopg[binary]>=3.2

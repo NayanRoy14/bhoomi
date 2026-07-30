@@ -6,11 +6,10 @@
 #   API       http://localhost:8000       docs at /docs
 #
 # Services arrive with the features that need them, rather than sitting idle:
-#   postgres           when scene caching lands (PLAN.md 6)
 #   redis, worker      January 2027, with the job queue (PLAN.md 9)
 #   titiler            January 2027, with tile serving (PLAN.md 11)
-# Adding them before anything uses them would only mean three containers that
-# can fail without anything noticing.
+# Adding them before anything uses them would only mean containers that can
+# fail without anything noticing.
 
 services:
   backend:
@@ -22,8 +21,32 @@ services:
       BHOOMI_LOG_LEVEL: ${BHOOMI_LOG_LEVEL:-INFO}
       BHOOMI_CORS_ORIGINS: ${BHOOMI_CORS_ORIGINS:-http://localhost:3000}
       BHOOMI_STAC_ENDPOINT: ${BHOOMI_STAC_ENDPOINT:-}
+      BHOOMI_DATABASE_URL: postgresql://bhoomi:${POSTGRES_PASSWORD:-bhoomi}@postgres:5432/bhoomi
     ports:
       - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  postgres:
+    # postgis/postgis rather than plain postgres: the scenes footprint column is
+    # GEOMETRY(Polygon, 4326) and the migration enables the extension (PLAN.md 6).
+    image: postgis/postgis:16-3.4
+    environment:
+      POSTGRES_USER: bhoomi
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-bhoomi}
+      POSTGRES_DB: bhoomi
+    healthcheck:
+      # `-U bhoomi` matters: without it pg_isready asks for the root role and
+      # reports the server unready while it is in fact serving.
+      test: ["CMD-SHELL", "pg_isready -U bhoomi -d bhoomi"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
     restart: unless-stopped
 
   frontend:
@@ -42,3 +65,6 @@ services:
       backend:
         condition: service_healthy
     restart: unless-stopped
+
+volumes:
+  postgres-data:
