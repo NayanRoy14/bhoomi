@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+.venv/
+venv/
+.mypy_cache/
+
+# Imagery and derived rasters. All of it is reproducible from the scripts in
+# probes/ and examples/, and none of it belongs in git -- band clips alone are
+# ~37 MB and result COGs ~35 MB.
+data/
+outputs/
+*.tif
+*.tiff
+*.npy
+*.npz
+
+# Figures committed for the README live in docs/images/ and are exempt above
+# only because they sit outside the ignored directories.
+
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

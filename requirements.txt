@@ -1,0 +1,10 @@
+# processing/ -- pure geospatial computation, no web dependencies (PLAN.md 10)
+rasterio>=1.5.0
+numpy>=2.0
+
+# optional: full COG validation. Without it cog.validate_cog falls back to a
+# structural check (tiled / overviews / nodata).
+rio-cogeo>=5.0
+
+# tests
+pytest>=8.0
