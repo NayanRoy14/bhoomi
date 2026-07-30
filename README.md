@@ -6,7 +6,8 @@ Bhoomi does not display pre-made map layers. It performs geospatial computation 
 returns a standards-compliant raster product that another GIS tool can consume.
 
 > ⚠️ **Early development.** Scene search works end to end — draw an area, get real Sentinel-2
-> scenes. Server-side processing arrives in January 2027. See [Status](#status).
+> scenes. The job queue works too, but the only process registered so far computes nothing:
+> real server-side processing is the next piece. See [Status](#status).
 > Development runs August 2026 – March 2027.
 
 ![NDVI change over New Town / Rajarhat, Kolkata, 2020 to 2026](docs/images/kolkata_change.png)
@@ -74,7 +75,7 @@ makes an OGC API – Processes async execution model natural rather than bolted 
 
 | Component | State |
 |---|---|
-| `processing/` — the raster library | **Working**, 93 tests passing |
+| `processing/` — the raster library | **Working** — verified against real Sentinel-2 data |
 | `catalogue/` — STAC client | **Working** — search, scene lookup, deduplication |
 | `pipeline.py` — composition layer | **Working** — AOI + dates in, COG out |
 | `examples/` — worked Kolkata analyses | **Working** |
@@ -82,15 +83,25 @@ makes an OGC API – Processes async execution model natural rather than bolted 
 | Next.js + MapLibre — draw, search, results | **Working** |
 | Docker Compose | **Working** — built and run; backend + postgres verified end to end |
 | PostGIS scene caching + alembic | **Working** — write-through on search, 39 tests |
-| Job queue, worker, TiTiler | Not started (January 2027) |
+| Job queue — Redis + RQ, worker, state machine | **Working**, with one caveat below |
+| Real processing, object storage, TiTiler | Not started |
 | OGC API – Processes | Not started (February 2027) |
 
-164 tests. The 16 that need a live PostGIS are skipped unless one is pointed at:
+**The queue works; nothing is plugged into it yet.** The only registered process is `fake`,
+which sleeps for ten seconds, reports all five stages, and produces no raster. Submitting
+`ndvi` returns `400 Unknown process 'ndvi'. Available: fake.` — deliberately, because a job
+reporting `completed` with nothing behind it would be a lie in the one field the design asks
+you to trust. Wiring the real indices in is the next piece of work.
+
+228 tests. 61 of them need Postgres or Redis and skip without:
 
 ```bash
 docker run -d --rm --name bhoomi-test-pg -p 55432:5432 \
     -e POSTGRES_PASSWORD=testpw -e POSTGRES_DB=bhoomi_test postgis/postgis:16-3.4
+docker run -d --rm --name bhoomi-test-redis -p 56379:6379 redis:7-alpine
+
 BHOOMI_TEST_DATABASE_URL=postgresql://postgres:testpw@localhost:55432/bhoomi_test \
+BHOOMI_TEST_REDIS_URL=redis://localhost:56379/1 \
     python -m pytest
 ```
 
@@ -143,10 +154,11 @@ python examples/kolkata_timeseries.py
 
 ```
 backend/      FastAPI -- HTTP and nothing else
-  api/routes/     health, scenes
+  api/routes/     health, scenes, jobs
   api/schemas.py  request/response models
   api/errors.py   messages that say what to do about it
-  db/             scene metadata cache; Postgres optional, alembic migrations
+  db/             scenes cache, jobs and outputs, alembic migrations
+  queue/          RQ setup, the process registry, the worker entry point
 cache.py      per-scene BOA-offset decisions -- JSON file, or the scenes table
 frontend/     Next.js + MapLibre -- AOI drawing, scene browsing
 catalogue/    STAC client -- no web framework, testable without a server
@@ -162,7 +174,7 @@ processing/   pure raster library -- no web dependencies, importable from a note
   cog.py          COG writing, validation, provenance tags
 examples/     worked analyses over Kolkata
 probes/       measurement scripts -- every empirical claim in PLAN.md is re-runnable
-tests/        164 tests; the 16 PostGIS ones need a container, the rest need nothing
+tests/        228 tests; 61 need Postgres or Redis, the rest need nothing
 docs/         data-source notes and the Bhoonidhi access request
 PLAN.md       the full project plan, with a live decisions register
 ```

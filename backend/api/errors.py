@@ -58,6 +58,63 @@ def unknown_process(process: str, available: list[str]) -> BhoomiError:
         available=sorted(available))
 
 
+def wrong_scene_count(process: str, expected: int, got: int) -> BhoomiError:
+    return BhoomiError(
+        400, "wrong_scene_count",
+        f"Process {process!r} requires exactly {expected} "
+        f"scene{'s' if expected != 1 else ''}; got {got}.",
+        expected=expected, got=got)
+
+
+def jobs_unavailable(reason: str) -> BhoomiError:
+    """503, not 500: the deployment is incomplete, the request was fine.
+
+    Says which dependency is missing because the only person who can act on
+    this is whoever is running the deployment.
+    """
+    return BhoomiError(
+        503, "jobs_unavailable",
+        f"Job submission is not available: {reason}. Scene search still works.")
+
+
+def too_many_active_jobs(active: int, limit: int, scope: str) -> BhoomiError:
+    """429 with Retry-After, per PLAN.md 8's concurrency caps."""
+    detail = ("You already have a job running. Wait for it to finish."
+              if scope == "client" else
+              f"All {limit} worker slots are busy. Try again shortly.")
+    error = BhoomiError(
+        429, "too_many_active_jobs", detail, active=active, limit=limit, scope=scope)
+    # Half the fake job's runtime: long enough not to hammer, short enough that
+    # a polite client is not left waiting well past the slot freeing up.
+    error.headers = {"Retry-After": "5"}
+    return error
+
+
+def job_not_found(job_id: str) -> BhoomiError:
+    return BhoomiError(404, "job_not_found", f"No job {job_id}.")
+
+
+def result_not_ready(job_id: str, status: str, progress: int) -> BhoomiError:
+    """404 while incomplete, carrying the current status (PLAN.md 7.5)."""
+    return BhoomiError(
+        404, "result_not_ready",
+        f"Job {job_id} is {status} ({progress}%); no result yet.",
+        status=status, progress=progress)
+
+
+def job_failed(job_id: str, status: str, message: str | None) -> BhoomiError:
+    """A finished job with nothing to serve. 409: it will never be ready.
+
+    Distinct from result_not_ready so a polling client can stop rather than
+    retry forever.
+    """
+    return BhoomiError(
+        409, "job_did_not_complete",
+        f"Job {job_id} {status.replace('_', ' ')}"
+        + (f": {message}" if message else "."),
+        status=status)
+
+
 async def catalogue_error_handler(request: Request, exc: CatalogueError) -> JSONResponse:
     """Upstream catalogue failures become 502/404, never an opaque 500."""
     if isinstance(exc, SceneNotFoundError):

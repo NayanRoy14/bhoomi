@@ -83,6 +83,83 @@ class SceneSearchResponse(BaseModel):
     scenes: list[SceneOut]
 
 
+#: PLAN.md 8. Concurrency, not throughput: one VPS with two worker slots.
+MAX_CONCURRENT_JOBS = 2
+MAX_CONCURRENT_JOBS_PER_IP = 1
+#: Jobs get a much tighter budget than search's 120/hour -- each one is real
+#: compute, not a proxied query.
+JOB_RATE_LIMIT = 20
+
+
+class Link(BaseModel):
+    """A hypermedia link, in the shape OGC API - Processes uses (PLAN.md 7.6)."""
+
+    rel: str
+    href: str
+    type: str = "application/json"
+
+
+class JobCreateRequest(BaseModel):
+    process: str
+    #: One scene for an index, two (chronological) for change (PLAN.md 7.3).
+    scene_ids: list[str] = Field(min_length=1, max_length=2)
+    aoi: Geometry
+    parameters: dict[str, Any] = Field(default_factory=dict)
+
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "process": "fake",
+                "scene_ids": ["S2B_45QXF_20260304_0_L2A"],
+                "aoi": {"type": "Polygon", "coordinates": [[
+                    [88.35, 22.55], [88.52, 22.55], [88.52, 22.68],
+                    [88.35, 22.68], [88.35, 22.55]]]},
+                "parameters": {},
+            }
+        }
+    }
+
+
+class JobCreateResponse(BaseModel):
+    job_id: str
+    status: str
+    position_in_queue: int
+    estimated_seconds: int
+    links: list[Link]
+
+
+class JobStatusResponse(BaseModel):
+    job_id: str
+    process: str
+    status: str
+    progress: int
+    message: str
+    #: Only ever a user-facing message; the traceback is never served (4.3).
+    error_message: str | None = None
+    created_at: datetime
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+
+
+class OutputOut(BaseModel):
+    type: str
+    cog: str
+    download: str
+    bounds: list[float]
+    crs: str
+    resolution_m: float
+    valid_fraction: float | None = None
+    stats: dict[str, Any] | None = None
+    expires_at: datetime | None = None
+    #: Populated once TiTiler is wired up (PLAN.md 11, January).
+    tiles: str | None = None
+
+
+class JobResultResponse(BaseModel):
+    job_id: str
+    outputs: list[OutputOut]
+
+
 class HealthResponse(BaseModel):
     status: Literal["ok", "degraded"]
     version: str

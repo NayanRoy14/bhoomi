@@ -1,12 +1,20 @@
-"""Persistence. Optional -- see `engine.database_url`.
+"""Persistence.
 
-Only the `scenes` table exists so far. `jobs` and `outputs` (PLAN.md 6) arrive
-in January with the queue that writes them, on the same principle the compose
-file follows: a table nothing reads is a schema that can drift without any test
-noticing.
+Optional for `scenes`, which is a cache (see `engine.database_url`), and
+required for `jobs`, which is the record of the work itself. `backend/db/jobs.py`
+explains why the second has no null implementation.
 """
 
 from backend.db.engine import database_url, get_engine, reset_engines
+from backend.db.jobs import (
+    Job,
+    JobStatus,
+    JobStore,
+    JobsUnavailable,
+    Output,
+    TooManyActiveJobs,
+    jobs_available,
+)
 from backend.db.scenes import (
     DEFAULT_CATALOGUE,
     NullSceneStore,
@@ -18,12 +26,19 @@ from backend.db.scenes import (
 
 __all__ = [
     "DEFAULT_CATALOGUE",
+    "Job",
+    "JobStatus",
+    "JobStore",
+    "JobsUnavailable",
     "NullSceneStore",
+    "Output",
     "PostgresOffsetCache",
     "PostgresSceneStore",
     "SceneStore",
+    "TooManyActiveJobs",
     "database_url",
     "default_scene_store",
     "get_engine",
+    "jobs_available",
     "reset_engines",
 ]

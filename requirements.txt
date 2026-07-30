@@ -25,3 +25,9 @@ uvicorn[standard]>=0.30
 SQLAlchemy>=2.0
 alembic>=1.13
 psycopg[binary]>=3.2
+
+# backend/queue/ -- the job queue (PLAN.md 4.2). RQ rather than Celery: one
+# broker, no result backend to configure, and the worker is a process rather
+# than a framework.
+rq>=2.0
+redis>=5.0

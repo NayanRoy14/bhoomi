@@ -6,8 +6,7 @@
 #   API       http://localhost:8000       docs at /docs
 #
 # Services arrive with the features that need them, rather than sitting idle:
-#   redis, worker      January 2027, with the job queue (PLAN.md 9)
-#   titiler            January 2027, with tile serving (PLAN.md 11)
+#   titiler            with tile serving, once outputs exist (PLAN.md 11)
 # Adding them before anything uses them would only mean containers that can
 # fail without anything noticing.
 
@@ -22,11 +21,63 @@ services:
       BHOOMI_CORS_ORIGINS: ${BHOOMI_CORS_ORIGINS:-http://localhost:3000}
       BHOOMI_STAC_ENDPOINT: ${BHOOMI_STAC_ENDPOINT:-}
       BHOOMI_DATABASE_URL: postgresql://bhoomi:${POSTGRES_PASSWORD:-bhoomi}@postgres:5432/bhoomi
+      BHOOMI_REDIS_URL: redis://redis:6379/0
     ports:
       - "8000:8000"
     depends_on:
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  worker:
+    # Same image as the backend -- the worker imports the same processing code,
+    # and a second Dockerfile would be a second thing to keep in step.
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    image: bhoomi-backend:dev
+    command: ["python", "-m", "backend.queue.worker"]
+    environment:
+      BHOOMI_LOG_LEVEL: ${BHOOMI_LOG_LEVEL:-INFO}
+      BHOOMI_DATABASE_URL: postgresql://bhoomi:${POSTGRES_PASSWORD:-bhoomi}@postgres:5432/bhoomi
+      BHOOMI_REDIS_URL: redis://redis:6379/0
+      # The backend has already migrated by the time this starts; two
+      # containers racing to create the same table is a real failure.
+      BHOOMI_SKIP_MIGRATIONS: "1"
+    # PLAN.md 8 caps concurrent jobs at 2, and that cap is only meaningful if
+    # the number of workers matches it.
+    deploy:
+      replicas: 2
+    # Overrides the image's HTTP check, which belongs to the backend: a worker
+    # serves no HTTP, so it would have sat permanently unhealthy while working
+    # perfectly. Redis reachability is the real liveness question for a worker
+    # -- without it there is nothing to pull, and the container is idle rather
+    # than broken, which is exactly the state a health check should surface.
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "from backend.queue.connection import get_redis; get_redis().ping()"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    # No persistence: the queue is a work list, not a record. The jobs table is
+    # the source of truth (PLAN.md 6), so a lost queue costs in-flight work,
+    # which the state machine already has to handle, rather than history.
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
     restart: unless-stopped
 
   postgres:

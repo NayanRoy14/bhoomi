@@ -21,18 +21,14 @@ from __future__ import annotations
 
 import dataclasses
 import json
-import os
 
 import pytest
 
 from backend.db import engine as db_engine
 from backend.db import scenes as db_scenes
 from catalogue import Scene
+from tests.conftest import TEST_DB_URL, needs_db
 from tests.test_catalogue import TILE_45QXF, item
-
-TEST_DB_URL = os.getenv("BHOOMI_TEST_DATABASE_URL")
-needs_db = pytest.mark.skipif(not TEST_DB_URL,
-                              reason="set BHOOMI_TEST_DATABASE_URL to run")
 
 MULTIPOLYGON = {"type": "MultiPolygon", "coordinates": [TILE_45QXF["coordinates"]]}
 
@@ -128,31 +124,7 @@ class TestRowMapping:
         assert "2020-03-10" in json.loads(params["properties"])["odd"]
 
 
-# --------------------------------------------------------------- integration
-
-@pytest.fixture(scope="module")
-def db():
-    """A migrated database, torn down and rebuilt once for this module."""
-    from alembic import command
-    from alembic.config import Config
-    from sqlalchemy import create_engine, text
-
-    url = db_engine.normalize_url(TEST_DB_URL)
-    eng = create_engine(url, future=True)
-
-    # Start from nothing so a half-migrated leftover cannot mask a broken
-    # migration -- the migration is one of the things under test.
-    with eng.begin() as conn:
-        conn.execute(text("DROP TABLE IF EXISTS scenes"))
-        conn.execute(text("DROP TABLE IF EXISTS alembic_version"))
-
-    cfg = Config("alembic.ini")
-    cfg.set_main_option("sqlalchemy.url", url)
-    command.upgrade(cfg, "head")
-
-    yield eng
-    eng.dispose()
-
+# ------------------------------------------------- integration (see conftest)
 
 @pytest.fixture
 def store(db):

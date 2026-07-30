@@ -10,7 +10,9 @@ from __future__ import annotations
 import os
 from functools import lru_cache
 
+from backend.api import errors
 from backend.db import SceneStore, default_scene_store
+from backend.db.jobs import JobStore, jobs_available
 from catalogue import Catalogue, EarthSearchCatalogue
 
 CATALOGUE_ENDPOINT = os.getenv("BHOOMI_STAC_ENDPOINT", "")
@@ -37,3 +39,15 @@ def get_scene_store() -> SceneStore:
     without a restart in development.
     """
     return default_scene_store()
+
+
+def get_job_store() -> JobStore:
+    """The jobs table. Refuses up front when there is no database.
+
+    No null variant exists on purpose (see `backend/db/jobs.py`): accepting a
+    submission with nowhere to record it would hand back a job id that can
+    never resolve. Raising here means the 503 carries the reason.
+    """
+    if not jobs_available():
+        raise errors.jobs_unavailable("no database is configured")
+    return JobStore()

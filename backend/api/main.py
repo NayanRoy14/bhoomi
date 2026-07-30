@@ -16,7 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from backend.api.errors import catalogue_error_handler
 from backend.api.ratelimit import rate_limit_middleware
-from backend.api.routes import health, scenes
+from backend.api.routes import health, jobs, scenes
 from catalogue import CatalogueError
 from processing import __version__
 
@@ -31,8 +31,12 @@ On-demand Earth Observation processing.
 Bhoomi does not display pre-made map layers. It performs geospatial computation
 on demand and returns Cloud-Optimized GeoTIFFs that any GIS tool can consume.
 
-**Currently implemented:** catalogue search.
-**January 2027:** asynchronous processing jobs and tile serving.
+**Currently implemented:** catalogue search, and the asynchronous job queue.
+
+The only registered process is `fake`, which sleeps for ten seconds and
+produces no raster. It exists to exercise the queue on its own; the real
+indices land next. Submitting `ndvi` today returns 400, on purpose — a job
+that reported `completed` with nothing behind it would be worse.
 """
 
 app = FastAPI(
@@ -59,3 +63,4 @@ app.add_exception_handler(CatalogueError, catalogue_error_handler)
 
 app.include_router(health.router)
 app.include_router(scenes.router)
+app.include_router(jobs.router)

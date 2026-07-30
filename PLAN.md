@@ -1437,6 +1437,54 @@ disappear.
 **Exit criterion:** on the public deployment, draw a polygon → pick a scene → click NDVI →
 watch progress → see the processed raster on the map. End to end, by a stranger.
 
+### Progress, 2026-07-31 — the plumbing, with nothing in the pipe
+
+| Piece | State |
+|---|---|
+| `jobs` + `outputs` tables, migration 0002 | ✅ |
+| Redis + RQ, worker container, §4.3 machine with progress | ✅ |
+| `POST /jobs`, `GET /jobs/{id}`, `GET /jobs/{id}/result` | ✅ |
+| §7.3 rejections, §8 caps (AOI, scene count, concurrency, 20/hour) | ✅ |
+| Real indices, object storage (O4), TiTiler, frontend picker | not started |
+
+The only registered process is **`fake`**: it sleeps ~10 s, walks all five stages, and produces
+no raster. Submitting `ndvi` today returns `400 Unknown process 'ndvi'. Available: fake.` That
+is deliberate — accepting it and reporting `completed` with nothing behind it would put a lie in
+the status field, which is the one field the whole design asks the user to trust.
+
+Verified with a worker in a separate process: submit → `202` + `Location` → poll → all six
+states observed in order (`queued, searching, reading, processing, writing_cog, completed`) →
+`200` with `outputs: []`. The empty array is the honest answer, not a placeholder.
+
+**The state machine is enforced in SQL, not in Python.** `advance` puts the legality check in
+the UPDATE's `WHERE` clause, so when two workers race, the database picks the winner and the
+loser updates zero rows and is told. A `SELECT` then `UPDATE` would let both believe they won.
+The case that matters: a retry landing after a success would move a `completed` job back to
+`processing`, and nothing would ever move it again.
+
+**Concurrency caps needed a lock, not a count.** `count active, then insert` is check-then-act:
+two submissions arriving together both see one active job, both decide there is room, and both
+insert — defeating precisely the limit being enforced. Count and insert now share a transaction
+behind `pg_advisory_xact_lock`.
+
+**`client_ip INET` rejects `request.client.host`.** That value is whatever the ASGI server
+reports, and it is not always an address — a test client says `testclient`, a unix-socket
+deployment has no peer, a misconfigured proxy can put a hostname there. Postgres rejected it and
+turned every submission into a 500: a crash caused by *how the client connected*, not by
+anything it asked for. Non-addresses are now stored NULL, which also switches off the per-IP cap
+for that caller — a limit cannot be applied to an identity we do not have — while the global cap
+still bounds the box.
+
+**The worker cannot start on Windows.** RQ's default worker runs each job in a forked child, and
+`os.fork` does not exist there, so `python -m backend.queue.worker` failed on the dev machine
+while working in the container. It now selects `SimpleWorker` when fork is absent, with the
+tradeoff stated in the code: jobs run in-process, so a GDAL segfault takes the worker with it,
+and the timeout is a timer rather than a killed child. Development only; the containers fork.
+
+**Redis carries no persistence and is not asked to.** The `jobs` table is the source of truth
+(§6), so a lost queue costs in-flight work — which the state machine already has to survive —
+rather than history.
+
 ---
 
 ## FEBRUARY 2027 — Milestone 3: research-grade

@@ -112,7 +112,24 @@ def client_key(request: Request) -> str:
     return request.client.host if request.client else "unknown"
 
 
+#: Jobs are real compute, not a proxied query, so they get their own much
+#: tighter budget (PLAN.md 8) checked inside the route rather than in the
+#: middleware -- the middleware sees every path and cannot tell a submission
+#: from a status poll, and a client polling its own job at 2 s (7.4) must not
+#: burn its job budget doing so.
+JOB_LIMIT = int(os.getenv("BHOOMI_JOB_LIMIT", "20"))
+
 _limiter: RateLimiter = SlidingWindowLimiter()
+_job_limiter: RateLimiter = SlidingWindowLimiter(limit=JOB_LIMIT)
+
+
+def set_job_limiter(limiter: RateLimiter) -> None:
+    global _job_limiter
+    _job_limiter = limiter
+
+
+def get_job_limiter() -> RateLimiter:
+    return _job_limiter
 
 #: Monitoring must never be throttled -- a health check that starts returning
 #: 429 reads as an outage and orchestrators restart containers over it.
