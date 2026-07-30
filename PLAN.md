@@ -1017,15 +1017,16 @@ bhoomi/
 │   ├── components/              # AOIDrawer, SceneList, JobProgress, SwipeCompare
 │   ├── lib/map/                 # MapLibre setup, draw controls, layer mgmt
 │   └── lib/api/                 # typed client for §7
+├── catalogue/                   # pure client, no web deps  [moved, see below]
+│   ├── base.py                  # Scene, SearchQuery, Catalogue protocol
+│   ├── earthsearch.py           # primary catalogue (D9)
+│   └── bhoonidhi.py             # P2, download-path ingest (§2.2)
+├── pipeline.py                  # composition: catalogue + processing
 ├── backend/
 │   ├── api/
 │   │   ├── routes/              # health, scenes, jobs, ogc
 │   │   ├── deps.py
 │   │   └── errors.py            # specific messages per §7.3
-│   ├── catalogue/
-│   │   ├── base.py              # Catalogue protocol
-│   │   ├── earthsearch.py
-│   │   └── bhoonidhi.py         # P2, download-path ingest (§2.2)
 │   ├── db/                      # SQLAlchemy models, alembic migrations
 │   ├── queue/                   # RQ setup, job enqueue
 │   └── ogc/                     # OGC API – Processes façade
@@ -1056,6 +1057,27 @@ bhoomi/
 **`processing/` must not import from `backend/`.** Keeping it a pure library means it is
 unit-testable without a database, reusable from a notebook, and directly demonstrable to
 someone who wants to see the science without running the stack.
+
+### Deviation from the original layout, 2026-07-30 — `catalogue/` moved out of `backend/`
+
+The first draft placed the catalogue client under `backend/catalogue/`. That was wrong for the
+same reason `processing/` is top-level: a STAC client has **no web-framework dependency**, is
+independently testable, and is useful from a notebook. Burying it under `backend/` would have
+made the December API a prerequisite for using it.
+
+The layering is now three flat levels, each importing only downward:
+
+| Layer | Knows about | Depends on |
+|---|---|---|
+| `catalogue/` | what scenes exist, where their bands live | nothing but stdlib + shapely |
+| `processing/` | masking, harmonisation, indices, COGs | numpy + rasterio |
+| `pipeline.py` | how to combine them | both of the above |
+| `backend/` | HTTP, jobs, persistence | `pipeline` |
+
+`catalogue/` and `processing/` **do not import each other** — the only module that knows both is
+`pipeline.py`. That is the seam the FastAPI worker calls in January, so the web layer adds HTTP
+and nothing else. It is also what lets Bhoonidhi arrive later as a second `Catalogue`
+implementation without touching any raster code.
 
 ---
 
@@ -1190,8 +1212,26 @@ work, so September is effectively banked.
 **Also in November:** resolve **O3** (hosting), provision the VPS, point a domain at it. Do
 this before December so Milestone 1 deploys onto something that already exists.
 
-**Exit criterion:** one command takes an AOI + date range and returns an NDVI COG, reading only
-the needed windows over HTTP, with a measured runtime.
+**Exit criterion:** ~~one command takes an AOI + date range and returns an NDVI COG, reading
+only the needed windows over HTTP.~~ ✅ **Met early, 2026-07-30.**
+
+`examples/search_and_process.py` takes an AOI polygon and a date range and returns a validated
+COG, with no scene ID or asset URL supplied by hand. Measured on the demo AOI: **19 scenes
+matched**, the 45QXE candidates correctly reported **38.3 % coverage** and were rejected under
+D3 while 45QXF reported **100 %**, and the resulting NDVI median was **0.324** against 0.327
+from the hand-wired path. The 0.003 gap is expected and the new value is the better one — the
+earlier path resampled twice (source → local clip → snapped grid) where this resamples once.
+
+**Scene deduplication added the same day.** The search returned the same acquisition twice at
+different baselines (`20200330_0_` at 02.14 and `_1_` at 05.00). Selecting on cloud cover alone
+would choose between them effectively at random, and two such picks across dates would place a
+Sen2Cor version change *inside* a change-detection result — the §5.4.4 hazard entering through
+scene selection rather than through arithmetic. `deduplicate_by_acquisition()` now keeps one
+scene per acquisition, preferring the newest baseline, and ranks baselines numerically so
+`05.10` correctly outranks `05.09`.
+
+**Still outstanding for this milestone:** benchmark the runtime and use it to set the §8 job
+timeout and the `estimated_seconds` field in §7.3.
 
 ---
 

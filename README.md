@@ -73,9 +73,10 @@ makes an OGC API – Processes async execution model natural rather than bolted 
 
 | Component | State |
 |---|---|
-| `processing/` — the raster library | **Working**, 44 tests passing |
+| `processing/` — the raster library | **Working**, 71 tests passing |
+| `catalogue/` — STAC client | **Working** — search, scene lookup, deduplication |
+| `pipeline.py` — composition layer | **Working** — AOI + dates in, COG out |
 | `examples/` — worked Kolkata analyses | **Working** |
-| STAC search integration | Partial — `examples/kolkata_timeseries.py` resolves scenes by ID |
 | FastAPI backend, PostGIS, queue, TiTiler | Not started (December 2026 – January 2027) |
 | Next.js frontend | Not started (December 2026) |
 | OGC API – Processes | Not started (February 2027) |
@@ -88,6 +89,9 @@ python -m pytest tests/ -q
 
 # Fetch the demo bands (reads only the AOI window from remote COGs)
 python probes/clip_demo_aoi.py
+
+# AOI + date range -> STAC search -> NDVI -> validated COG
+python examples/search_and_process.py
 
 # NDVI, NDBI, and the two-date change analysis
 python examples/kolkata_change.py
@@ -104,6 +108,10 @@ python examples/kolkata_timeseries.py
 ## Repository layout
 
 ```
+catalogue/    STAC client -- no web framework, testable without a server
+  base.py         Scene, SearchQuery, Catalogue protocol
+  earthsearch.py  Element84 Earth Search, with retry and deduplication
+pipeline.py   composition -- the only module importing both libraries
 processing/   pure raster library -- no web dependencies, importable from a notebook
   harmonize.py    DN -> reflectance, with pixel-based offset detection
   masking.py      SCL cloud and shadow masking
@@ -113,13 +121,15 @@ processing/   pure raster library -- no web dependencies, importable from a note
   cog.py          COG writing, validation, provenance tags
 examples/     worked analyses over Kolkata
 probes/       measurement scripts -- every empirical claim in PLAN.md is re-runnable
-tests/        44 unit tests
+tests/        71 unit tests, none requiring network
 docs/         data-source notes and the Bhoonidhi access request
 PLAN.md       the full project plan, with a live decisions register
 ```
 
-`processing/` must never import from the backend. That keeps it unit-testable without a
-database and demonstrable without running the stack.
+`catalogue/` and `processing/` never import each other, and neither imports the backend. The
+only module that knows both is `pipeline.py` — the seam the worker will call, so the web layer
+adds HTTP and nothing else. It is also what lets Bhoonidhi arrive later as a second `Catalogue`
+implementation without touching any raster code.
 
 ## A note on the hard part
 

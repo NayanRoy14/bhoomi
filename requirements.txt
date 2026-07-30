@@ -8,3 +8,6 @@ rio-cogeo>=5.0
 
 # tests
 pytest>=8.0
+
+# catalogue/ -- geometry for AOI/footprint intersection
+shapely>=2.0
