@@ -30,3 +30,6 @@ outputs/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Persistent scene-offset cache (cache.py). Reproducible, machine-local.
+.cache/

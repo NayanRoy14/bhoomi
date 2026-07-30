@@ -18,6 +18,7 @@ from pathlib import Path
 
 import numpy as np
 
+import cache
 from catalogue import Scene
 from processing import (
     Grid,
@@ -33,9 +34,17 @@ from processing import (
 
 logger = logging.getLogger(__name__)
 
-#: Offset detection reads a decimated overview per scene. Cache by scene id --
-#: it is a property of the scene, not of the request.
-_OFFSET_CACHE: dict[str, bool] = {}
+#: Offset detection reads a decimated overview per scene (~6.0 s). Cached by
+#: scene id because it is a property of the scene, not of the request. The
+#: default persists to disk so a worker restart does not re-pay it; swap in a
+#: PostgresOffsetCache when the scenes table lands (PLAN.md 6).
+_offset_cache: cache.OffsetCache = cache.default_cache()
+
+
+def set_offset_cache(new_cache: cache.OffsetCache) -> None:
+    """Replace the cache backend. Called by tests and by the worker bootstrap."""
+    global _offset_cache
+    _offset_cache = new_cache
 
 
 class PipelineError(RuntimeError):
@@ -107,11 +116,14 @@ def offset_present(scene: Scene, band: str = "nir") -> bool:
     every metadata field claiming to answer this has been observed wrong
     (PLAN.md 5.3).
     """
-    if scene.id not in _OFFSET_CACHE:
-        _OFFSET_CACHE[scene.id] = harmonize.detect_offset_in_scene(scene.href(band))
-        logger.info("scene %s: offset_present=%s (from pixels)",
-                    scene.id, _OFFSET_CACHE[scene.id])
-    return _OFFSET_CACHE[scene.id]
+    cached = _offset_cache.get(scene.id)
+    if cached is not None:
+        return cached
+
+    detected = harmonize.detect_offset_in_scene(scene.href(band))
+    _offset_cache.set(scene.id, detected)
+    logger.info("scene %s: offset_present=%s (measured from pixels)", scene.id, detected)
+    return detected
 
 
 def compute_index(

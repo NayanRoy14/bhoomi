@@ -1010,9 +1010,16 @@ technical prevents raising it. Revisit it against real R2 costs (O4), not agains
 1. **`estimated_seconds` (§7.3)** = `3.2 + 2.8 × Mpixels` for a single index; roughly double it
    for two-date change, plus offset detection if uncached.
 2. **Offset detection costs ~6.0 s per scene** — over a third of a maximum-size job, and more
-   than the entire compute for a small one. It is cached per scene in-process, but it is a
-   property of the scene and must be **persisted in `scenes`** (§6) so it is paid once per scene
-   ever, not once per worker restart.
+   than the entire compute for a small one. It is a property of the scene, not of the request.
+
+   **Persisted as of 2026-07-30** (`cache.py`). Measured across two separate interpreter
+   processes: **8.08 s cold, 0.02 s warm** — a ~400× saving on the repeat, and the saving
+   survives a worker restart, which the previous in-process dict did not.
+
+   The backend is a `Protocol` with a JSON-file implementation. When the `scenes` table lands
+   (§6), a `PostgresOffsetCache` implements the same three methods and the default changes;
+   nothing else moves. `BHOOMI_CACHE_DIR=` (empty) selects the in-memory backend, which is what
+   the test suite wants.
 
 R6 (worker OOM at the cap) is **closed**: tested at the cap, 115 MB against a 2 GB ceiling.
 
