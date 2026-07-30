@@ -14,3 +14,8 @@ shapely>=2.0
 
 # probes/benchmark_pipeline.py only
 psutil>=5.9
+
+# backend/ -- API layer
+fastapi>=0.115
+uvicorn[standard]>=0.30
+httpx>=0.27          # required by fastapi.testclient

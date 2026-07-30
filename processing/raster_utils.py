@@ -62,6 +62,22 @@ def utm_crs_for(lon: float, lat: float) -> CRS:
     return CRS.from_epsg(epsg)
 
 
+def geometry_area_km2(geometry: dict) -> float:
+    """True area of a GeoJSON geometry in km², via its local UTM zone.
+
+    Computing area in degrees is meaningless -- a degree of longitude is 111 km
+    at the equator and 103 km at Kolkata's latitude. Projecting first is the
+    only way to enforce an area limit that means the same thing everywhere.
+    """
+    from rasterio.warp import transform_geom
+    from shapely.geometry import shape
+
+    geom = shape(geometry)
+    centroid = geom.centroid
+    utm = utm_crs_for(centroid.x, centroid.y)
+    return shape(transform_geom(WGS84, utm.to_string(), geometry)).area / 1e6
+
+
 @dataclass(frozen=True)
 class Grid:
     """A concrete output raster definition: CRS, affine transform and shape.
