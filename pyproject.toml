@@ -1,0 +1,16 @@
+[project]
+name = "bhoomi"
+version = "0.1.0"
+description = "On-demand Earth Observation processing for Indian and open satellite data"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+
+[tool.pytest.ini_options]
+# Put the repo root on sys.path so `pytest` works as well as `python -m pytest`.
+# Without this, bare `pytest` fails to import catalogue/ and processing/ -- the
+# two invocations have different sys.path behaviour and only the latter happens
+# to add the working directory.
+pythonpath = ["."]
+testpaths = ["tests"]
+addopts = "-q"

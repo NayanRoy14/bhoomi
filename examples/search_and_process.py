@@ -18,7 +18,11 @@ from __future__ import annotations
 import logging
 import sys
 
-sys.path.insert(0, r"D:\Bhoomi")
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+
+sys.path.insert(0, str(ROOT))
 
 import pipeline  # noqa: E402
 from catalogue import EarthSearchCatalogue, SearchQuery  # noqa: E402
@@ -26,7 +30,7 @@ from processing import cog  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)-7s %(name)s: %(message)s")
 
-OUT = r"D:\Bhoomi\outputs"
+OUT = ROOT / "outputs"
 AOI = {  # D13: New Town / Rajarhat, Kolkata
     "type": "Polygon",
     "coordinates": [[[88.35, 22.55], [88.52, 22.55], [88.52, 22.68],
@@ -66,7 +70,7 @@ def main() -> None:
     for w in result.warnings:
         print(f"WARNING: {w}")
 
-    path = result.write(rf"{OUT}\ndvi_from_search.tif")
+    path = result.write(OUT / "ndvi_from_search.tif")
     ok, messages = cog.validate_cog(path)
     print(f"\nwrote {path.name}  valid COG: {ok} {messages if messages else ''}")
     print("\nexpected median ~0.327 (matches examples/kolkata_change.py)")

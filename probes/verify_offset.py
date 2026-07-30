@@ -22,11 +22,15 @@ metadata field is reliable, and the convention must be detected from the pixels.
 import numpy as np
 import rasterio
 
-D = r"D:\Bhoomi\data"
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+
+D = ROOT / "data"
 
 
 def band(name):
-    with rasterio.open(rf"{D}\{name}.tif") as s:
+    with rasterio.open(D / f"{name}.tif") as s:
         return s.read(1).astype("float64")
 
 

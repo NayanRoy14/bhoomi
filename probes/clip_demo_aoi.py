@@ -13,6 +13,10 @@ import rasterio
 from rasterio.warp import transform_bounds
 from rasterio.windows import from_bounds
 
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+
 # GDAL tuning for reading COGs over HTTP -- without these it makes far too many requests
 os.environ["GDAL_DISABLE_READDIR_ON_OPEN"] = "EMPTY_DIR"
 os.environ["CPL_VSIL_CURL_ALLOWED_EXTENSIONS"] = ".tif"
@@ -20,7 +24,7 @@ os.environ["GDAL_HTTP_MULTIPLEX"] = "YES"
 os.environ["VSI_CACHE"] = "TRUE"
 
 AOI_WGS84 = (88.35, 22.55, 88.52, 22.68)  # lon_min, lat_min, lon_max, lat_max
-OUT_DIR = r"D:\Bhoomi\data"
+OUT_DIR = ROOT / "data"
 
 BASE = "https://sentinel-cogs.s3.us-west-2.amazonaws.com/sentinel-s2-l2a-cogs/45/Q/XF"
 SCENES = {

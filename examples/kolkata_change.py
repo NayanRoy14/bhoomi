@@ -15,7 +15,11 @@ import sys
 
 import numpy as np
 
-sys.path.insert(0, r"D:\Bhoomi")
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+
+sys.path.insert(0, str(ROOT))
 
 from processing import (  # noqa: E402
     apply_mask, change, cog, grid_for_aoi, indices, masking,
@@ -24,8 +28,8 @@ from processing import (  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 
-DATA = r"D:\Bhoomi\data"
-OUT = r"D:\Bhoomi\outputs"
+DATA = ROOT / "data"
+OUT = ROOT / "outputs"
 AOI = (88.35, 22.55, 88.52, 22.68)  # D13: New Town / Rajarhat
 
 SCENES = {
@@ -51,9 +55,9 @@ SCENES = {
 def compute_ndvi(year: int, grid: raster_utils.Grid) -> tuple[np.ndarray, float]:
     props = SCENES[year]["properties"]
 
-    nir_dn = raster_utils.read_to_grid(rf"{DATA}\{year}_nir.tif", grid)
-    red_dn = raster_utils.read_to_grid(rf"{DATA}\{year}_red.tif", grid)
-    scl = raster_utils.read_scl_to_grid(rf"{DATA}\{year}_scl.tif", grid)
+    nir_dn = raster_utils.read_to_grid(DATA / f"{year}_nir.tif", grid)
+    red_dn = raster_utils.read_to_grid(DATA / f"{year}_red.tif", grid)
+    scl = raster_utils.read_scl_to_grid(DATA / f"{year}_scl.tif", grid)
 
     # DN 0 is nodata in Sentinel-2 L2A; fold it into the mask.
     invalid = masking.scl_mask(scl) | (nir_dn == 0) | (red_dn == 0)
@@ -95,7 +99,7 @@ def main() -> None:
     print("\n--- outputs ---")
     for name, arr, year in [("ndvi_2020", ndvi_2020, 2020), ("ndvi_2026", ndvi_2026, 2026)]:
         path = cog.write_cog(
-            rf"{OUT}\{name}.tif", arr, grid,
+            OUT / f"{name}.tif", arr, grid,
             metadata=cog.default_metadata(
                 "ndvi", [SCENES[year]["id"]], "(nir - red) / (nir + red)",
                 baselines=[SCENES[year]["properties"]["s2:processing_baseline"]]))
@@ -103,7 +107,7 @@ def main() -> None:
         print(f"  {path.name:14} valid COG: {ok}  {msgs if msgs else ''}")
 
     path = cog.write_cog(
-        rf"{OUT}\ndvi_change.tif", diff, grid,
+        OUT / "ndvi_change.tif", diff, grid,
         metadata=cog.default_metadata(
             "change", [SCENES[2020]["id"], SCENES[2026]["id"]],
             "ndvi(2026) - ndvi(2020)",

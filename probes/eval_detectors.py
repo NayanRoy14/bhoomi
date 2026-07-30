@@ -22,7 +22,11 @@ import json
 
 import numpy as np
 
-CACHE = r"D:\Bhoomi\data\series_cache.npz"
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+
+CACHE = ROOT / "data" / "series_cache.npz"
 YEARS = [2020, 2021, 2022, 2023, 2024, 2025, 2026]
 
 #: Established from DN medians: only the 2022 scene carries the raw offset.

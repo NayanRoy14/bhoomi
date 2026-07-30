@@ -10,11 +10,15 @@ much smaller shift than SCL does, SCL is overstating it.
 import numpy as np
 import rasterio
 
-D = r"D:\Bhoomi\data"
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+
+D = ROOT / "data"
 
 
 def band(n):
-    with rasterio.open(rf"{D}\{n}.tif") as s:
+    with rasterio.open(D / f"{n}.tif") as s:
         return s.read(1).astype("float64")
 
 

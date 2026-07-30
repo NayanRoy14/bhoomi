@@ -16,7 +16,11 @@ import time
 
 import psutil
 
-sys.path.insert(0, r"D:\Bhoomi")
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+
+sys.path.insert(0, str(ROOT))
 
 import pipeline  # noqa: E402
 from catalogue import EarthSearchCatalogue, SearchQuery  # noqa: E402

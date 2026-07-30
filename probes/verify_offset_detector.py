@@ -20,7 +20,11 @@ import urllib.request
 import numpy as np
 from rasterio.enums import Resampling
 
-sys.path.insert(0, r"D:\Bhoomi")
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+
+sys.path.insert(0, str(ROOT))
 
 from processing import grid_for_aoi, raster_utils  # noqa: E402
 

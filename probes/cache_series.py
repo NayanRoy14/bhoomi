@@ -15,11 +15,15 @@ import urllib.request
 import numpy as np
 from rasterio.enums import Resampling
 
-sys.path.insert(0, r"D:\Bhoomi")
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+
+sys.path.insert(0, str(ROOT))
 
 from processing import grid_for_aoi, raster_utils  # noqa: E402
 
-CACHE = r"D:\Bhoomi\data\series_cache.npz"
+CACHE = ROOT / "data" / "series_cache.npz"
 SCENES = {
     2020: "S2A_45QXF_20200310_1_L2A",
     2021: "S2A_45QXF_20210315_2_L2A",

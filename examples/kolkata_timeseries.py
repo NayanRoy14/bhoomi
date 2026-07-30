@@ -16,12 +16,16 @@ import sys
 
 import numpy as np
 
-sys.path.insert(0, r"D:\Bhoomi")
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+
+sys.path.insert(0, str(ROOT))
 
 from processing import apply_mask, harmonize, indices, masking  # noqa: E402
 
-CACHE = r"D:\Bhoomi\data\series_cache.npz"
-OUT = r"D:\Bhoomi\outputs"
+CACHE = ROOT / "data" / "series_cache.npz"
+OUT = ROOT / "outputs"
 YEARS = [2020, 2021, 2022, 2023, 2024, 2025, 2026]
 
 z = np.load(CACHE, allow_pickle=True)
@@ -96,4 +100,4 @@ for y in YEARS[1:]:
     if c:
         print(f"    {y}: {c:>8,}  {c / total * 100:5.2f}%")
 
-np.save(rf"{OUT}\_series_ndvi.npy", np.stack([series[y] for y in YEARS]))
+np.save(OUT / "_series_ndvi.npy", np.stack([series[y] for y in YEARS]))

@@ -12,6 +12,10 @@ import rasterio
 from rasterio.warp import transform_bounds
 from rasterio.windows import from_bounds
 
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+
 os.environ["GDAL_DISABLE_READDIR_ON_OPEN"] = "EMPTY_DIR"
 os.environ["CPL_VSIL_CURL_ALLOWED_EXTENSIONS"] = ".tif"
 
@@ -34,7 +38,7 @@ for label, url in SCENES.items():
     with rasterio.open(url) as src:
         b = transform_bounds("EPSG:4326", src.crs, *AOI)
         scl = src.read(1, window=from_bounds(*b, transform=src.transform))
-        out = rf"D:\Bhoomi\data\{label}_scl.tif"
+        out = ROOT / "data" / f"{label}_scl.tif"
         prof = src.profile.copy()
         prof.update(driver="GTiff", height=scl.shape[0], width=scl.shape[1],
                     transform=src.window_transform(from_bounds(*b, transform=src.transform)),

@@ -22,7 +22,11 @@ import sys
 import numpy as np
 from rasterio.enums import Resampling
 
-sys.path.insert(0, r"D:\Bhoomi")
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+
+sys.path.insert(0, str(ROOT))
 
 from processing import (  # noqa: E402
     apply_mask, change, cog, grid_for_aoi, indices, masking,
@@ -31,7 +35,7 @@ from processing import (  # noqa: E402
 
 logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s")
 
-DATA, OUT = r"D:\Bhoomi\data", r"D:\Bhoomi\outputs"
+DATA, OUT = ROOT / "data", ROOT / "outputs"
 AOI = (88.35, 22.55, 88.52, 22.68)
 BASE = "https://sentinel-cogs.s3.us-west-2.amazonaws.com/sentinel-s2-l2a-cogs/45/Q/XF"
 
@@ -59,10 +63,10 @@ def load_year(year: int, grid):
 
     # Downsampling 10 m -> 20 m: average, not bilinear. Averaging is what a 20 m
     # detector would have measured; bilinear just interpolates four samples.
-    nir_dn = raster_utils.read_to_grid(rf"{DATA}\{year}_nir.tif", grid, Resampling.average)
-    red_dn = raster_utils.read_to_grid(rf"{DATA}\{year}_red.tif", grid, Resampling.average)
+    nir_dn = raster_utils.read_to_grid(DATA / f"{year}_nir.tif", grid, Resampling.average)
+    red_dn = raster_utils.read_to_grid(DATA / f"{year}_red.tif", grid, Resampling.average)
     swir_dn = raster_utils.read_to_grid(SCENES[year]["swir"], grid, Resampling.average)
-    scl = raster_utils.read_scl_to_grid(rf"{DATA}\{year}_scl.tif", grid)
+    scl = raster_utils.read_scl_to_grid(DATA / f"{year}_scl.tif", grid)
 
     invalid = masking.scl_mask(scl) | (nir_dn == 0) | (red_dn == 0) | (swir_dn == 0)
 
@@ -121,7 +125,7 @@ def main() -> None:
           f"{(lost & ~built).sum() / lost.sum() * 100:5.2f}%")
 
     path = cog.write_cog(
-        rf"{OUT}\ndbi_change.tif", d_ndbi, grid,
+        OUT / "ndbi_change.tif", d_ndbi, grid,
         metadata=cog.default_metadata(
             "change", [SCENES[2020]["id"], SCENES[2026]["id"]],
             "ndbi(2026) - ndbi(2020)", baselines=["05.00", "05.12"],
@@ -129,8 +133,8 @@ def main() -> None:
     ok, msgs = cog.validate_cog(path)
     print(f"\nwrote {path.name}  valid COG: {ok} {msgs if msgs else ''}")
 
-    np.save(rf"{OUT}\_d_ndvi_20m.npy", d_ndvi)
-    np.save(rf"{OUT}\_d_ndbi_20m.npy", d_ndbi)
+    np.save(OUT / "_d_ndvi_20m.npy", d_ndvi)
+    np.save(OUT / "_d_ndbi_20m.npy", d_ndbi)
 
 
 if __name__ == "__main__":
