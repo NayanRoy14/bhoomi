@@ -5,8 +5,9 @@
 Bhoomi does not display pre-made map layers. It performs geospatial computation on demand and
 returns a standards-compliant raster product that another GIS tool can consume.
 
-> ⚠️ **Early development.** The processing library is complete and tested; the web application
-> and API are not built yet. See [Status](#status). Development runs August 2026 – March 2027.
+> ⚠️ **Early development.** Scene search works end to end — draw an area, get real Sentinel-2
+> scenes. Server-side processing arrives in January 2027. See [Status](#status).
+> Development runs August 2026 – March 2027.
 
 ![NDVI change over New Town / Rajarhat, Kolkata, 2020 to 2026](docs/images/kolkata_change.png)
 
@@ -73,20 +74,44 @@ makes an OGC API – Processes async execution model natural rather than bolted 
 
 | Component | State |
 |---|---|
-| `processing/` — the raster library | **Working**, 71 tests passing |
+| `processing/` — the raster library | **Working**, 93 tests passing |
 | `catalogue/` — STAC client | **Working** — search, scene lookup, deduplication |
 | `pipeline.py` — composition layer | **Working** — AOI + dates in, COG out |
 | `examples/` — worked Kolkata analyses | **Working** |
-| FastAPI backend, PostGIS, queue, TiTiler | Not started (December 2026 – January 2027) |
-| Next.js frontend | Not started (December 2026) |
+| FastAPI — `/health`, scene search, `/docs` | **Working** |
+| Next.js + MapLibre — draw, search, results | **Working** |
+| Docker Compose | Written, **not yet run** — no Docker on the dev machine |
+| PostGIS scene caching | Not started |
+| Job queue, worker, TiTiler | Not started (January 2027) |
 | OGC API – Processes | Not started (February 2027) |
 
 ## Running it
 
-```bash
-pip install -r requirements.txt
-python -m pytest tests/ -q
+The whole stack, from a clean clone:
 
+```bash
+cp .env.example .env
+docker compose up --build
+#  frontend  http://localhost:3000
+#  API       http://localhost:8000/docs
+```
+
+Or without Docker:
+
+```bash
+pip install -r requirements-dev.txt
+python -m pytest
+
+# API on :8000
+uvicorn backend.api.main:app --reload
+
+# frontend on :3000, in another shell
+cd frontend && npm install && npm run dev
+```
+
+### The analyses
+
+```bash
 # Fetch the demo bands (reads only the AOI window from remote COGs)
 python probes/clip_demo_aoi.py
 
@@ -108,6 +133,11 @@ python examples/kolkata_timeseries.py
 ## Repository layout
 
 ```
+backend/      FastAPI -- HTTP and nothing else
+  api/routes/     health, scenes
+  api/schemas.py  request/response models
+  api/errors.py   messages that say what to do about it
+frontend/     Next.js + MapLibre -- AOI drawing, scene browsing
 catalogue/    STAC client -- no web framework, testable without a server
   base.py         Scene, SearchQuery, Catalogue protocol
   earthsearch.py  Element84 Earth Search, with retry and deduplication
@@ -121,7 +151,7 @@ processing/   pure raster library -- no web dependencies, importable from a note
   cog.py          COG writing, validation, provenance tags
 examples/     worked analyses over Kolkata
 probes/       measurement scripts -- every empirical claim in PLAN.md is re-runnable
-tests/        71 unit tests, none requiring network
+tests/        93 unit tests, none requiring network
 docs/         data-source notes and the Bhoonidhi access request
 PLAN.md       the full project plan, with a live decisions register
 ```

@@ -1,0 +1,44 @@
+# Bhoomi development environment.
+#
+#   docker compose up --build
+#
+#   frontend  http://localhost:3000
+#   API       http://localhost:8000       docs at /docs
+#
+# Services arrive with the features that need them, rather than sitting idle:
+#   postgres           when scene caching lands (PLAN.md 6)
+#   redis, worker      January 2027, with the job queue (PLAN.md 9)
+#   titiler            January 2027, with tile serving (PLAN.md 11)
+# Adding them before anything uses them would only mean three containers that
+# can fail without anything noticing.
+
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    image: bhoomi-backend:dev
+    environment:
+      BHOOMI_LOG_LEVEL: ${BHOOMI_LOG_LEVEL:-INFO}
+      BHOOMI_CORS_ORIGINS: ${BHOOMI_CORS_ORIGINS:-http://localhost:3000}
+      BHOOMI_STAC_ENDPOINT: ${BHOOMI_STAC_ENDPOINT:-}
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        # Inlined at build time by Next.js, so it must be the URL the *browser*
+        # will use -- not the compose service name, which only resolves inside
+        # the network.
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+    image: bhoomi-frontend:dev
+    ports:
+      - "3000:3000"
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped

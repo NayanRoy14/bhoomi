@@ -1,0 +1,3 @@
+# Bhoomi. Nothing here is sensitive; the API is documented at /docs.
+User-agent: *
+Allow: /

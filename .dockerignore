@@ -1,0 +1,26 @@
+# Keep the build context small and free of local artefacts.
+.git/
+.gitignore
+.pytest_cache/
+__pycache__/
+*.py[cod]
+
+# Imagery and results -- 100 MB of it, all reproducible.
+data/
+outputs/
+*.tif
+*.npy
+*.npz
+
+# Not needed at runtime.
+probes/
+examples/
+tests/
+docs/
+frontend/
+PLAN.md
+requirements-dev.txt
+
+.env
+.env.*
+!.env.example

@@ -1,0 +1,11 @@
+# Development, testing and analysis. Not installed in the runtime image.
+-r requirements.txt
+
+pytest>=8.0
+httpx>=0.27           # required by fastapi.testclient
+
+# examples/render_results.py -- figures for the README and report
+matplotlib>=3.9
+
+# probes/benchmark_pipeline.py -- peak RSS measurement
+psutil>=5.9
