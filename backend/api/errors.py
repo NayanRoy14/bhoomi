@@ -115,6 +115,19 @@ def job_failed(job_id: str, status: str, message: str | None) -> BhoomiError:
         status=status)
 
 
+def output_missing(job_id: str) -> BhoomiError:
+    """410, not 404: it existed. Retrying will not bring it back.
+
+    Either the 30-day retention (PLAN.md 6) has passed, or the worker wrote to
+    a filesystem this process cannot read -- the failure mode that object
+    storage removes and that LocalStorage cannot.
+    """
+    return BhoomiError(
+        410, "output_missing",
+        f"The output for job {job_id} is no longer available. Outputs are kept "
+        "for 30 days; submit the job again to regenerate it.")
+
+
 async def catalogue_error_handler(request: Request, exc: CatalogueError) -> JSONResponse:
     """Upstream catalogue failures become 502/404, never an opaque 500."""
     if isinstance(exc, SceneNotFoundError):

@@ -1,0 +1,151 @@
+"""Where finished COGs live (PLAN.md D5, O4).
+
+D5 says outputs belong in object storage and that `outputs.cog_uri` is a URL,
+never a filesystem path. O4 — R2 vs S3 vs B2 — is not due until 2026-12-31,
+and waiting for it would mean no working NDVI job until then. So this is the
+seam rather than the decision: a Protocol with a local-filesystem backend now,
+and an S3-compatible one added when O4 resolves, changing one class.
+
+`cog_uri` is a URL in both cases. The local backend has no public endpoint of
+its own, so it returns None from `url_for` and the caller falls back to the
+API's own `/download` route (7.5) — which is a URL, reachable by TiTiler, and
+does not encode a path into the database.
+
+**LocalStorage is single-host.** The worker writes the file and the API serves
+it, so they must share a filesystem; compose gives them a named volume. That
+constraint is precisely what object storage removes, and it is the argument
+for settling O4 before the deployment has more than one box.
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+import shutil
+import threading
+from pathlib import Path
+from typing import Protocol, runtime_checkable
+
+logger = logging.getLogger(__name__)
+
+#: Where the API is reachable from outside. Used to turn a download route into
+#: an absolute URL, because `cog_uri` has to mean something to a client that is
+#: not the API itself -- TiTiler, or a `gdalinfo /vsicurl/...`.
+PUBLIC_BASE_URL = os.getenv("BHOOMI_PUBLIC_BASE_URL", "http://localhost:8000")
+
+DEFAULT_OUTPUT_DIR = Path(os.getenv("BHOOMI_OUTPUT_DIR", "outputs/jobs"))
+
+#: PLAN.md 8. Refuse to publish beyond this rather than filling the disk; a
+#: 500 km2 NDVI COG is ~20 MB, so this is roughly a 10x headroom backstop.
+MAX_OUTPUT_BYTES = int(os.getenv("BHOOMI_MAX_OUTPUT_MB", "200")) * 1024 * 1024
+
+
+class OutputTooLarge(RuntimeError):
+    """A finished raster exceeded the 8 size cap and was not published."""
+
+    def __init__(self, size_bytes: int, limit: int) -> None:
+        self.size_bytes, self.limit = size_bytes, limit
+        super().__init__(
+            f"Output is {size_bytes / 1e6:.0f} MB; the maximum is {limit / 1e6:.0f} MB.")
+
+
+@runtime_checkable
+class Storage(Protocol):
+    def put(self, source: Path, key: str) -> int:
+        """Store `source` under `key`. Returns the size in bytes."""
+
+    def url_for(self, key: str) -> str | None:
+        """A directly fetchable URL, or None if the API must serve it."""
+
+    def local_path(self, key: str) -> Path | None:
+        """A readable path, or None for backends that are not filesystems."""
+
+    def scratch_dir(self) -> Path | None:
+        """Where to build an object so that storing it is cheap, or None.
+
+        A COG has to be written to a path before it can be stored. Writing it
+        under the system temp directory and then storing it copies the whole
+        file across devices -- `/tmp` and a mounted volume are not the same
+        filesystem. Staging inside the destination makes the store a rename.
+        Remote backends have no such advantage and return None.
+        """
+
+    def delete(self, key: str) -> None:
+        ...
+
+
+class LocalStorage(Storage):
+    """A directory on disk. Development, and single-box deployments."""
+
+    def __init__(self, root: str | Path | None = None) -> None:
+        self.root = Path(root) if root is not None else DEFAULT_OUTPUT_DIR
+        self._lock = threading.Lock()
+
+    def put(self, source: Path, key: str) -> int:
+        size = Path(source).stat().st_size
+        if size > MAX_OUTPUT_BYTES:
+            raise OutputTooLarge(size, MAX_OUTPUT_BYTES)
+        destination = self._path(key)
+        with self._lock:
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            # move, not copy: the source is a scratch file the caller is about
+            # to discard, and a 20 MB copy per job is pure waste.
+            shutil.move(str(source), destination)
+        logger.info("stored %s (%.1f MB)", key, size / 1e6)
+        return size
+
+    def url_for(self, key: str) -> str | None:
+        return None  # served by the API; see the module docstring
+
+    def local_path(self, key: str) -> Path | None:
+        path = self._path(key)
+        return path if path.exists() else None
+
+    def scratch_dir(self) -> Path | None:
+        """Inside the root, so `put` is a rename rather than a copy.
+
+        A sibling directory rather than the root itself: a half-written COG
+        must never be visible under a key that `local_path` would serve.
+        """
+        scratch = self.root / ".scratch"
+        scratch.mkdir(parents=True, exist_ok=True)
+        return scratch
+
+    def delete(self, key: str) -> None:
+        self._path(key).unlink(missing_ok=True)
+
+    def _path(self, key: str) -> Path:
+        # Keys are generated from job UUIDs, never from user input, but a
+        # traversal here would read arbitrary files -- cheap to rule out.
+        if "/" in key or "\\" in key or key.startswith("."):
+            raise ValueError(f"Unsafe storage key {key!r}")
+        return self.root / key
+
+
+_storage: Storage | None = None
+_factory_lock = threading.Lock()
+
+
+def get_storage() -> Storage:
+    global _storage
+    with _factory_lock:
+        if _storage is None:
+            _storage = LocalStorage()
+        return _storage
+
+
+def set_storage(storage: Storage | None) -> None:
+    """Replace the backend. Tests, and the S3 bootstrap when O4 resolves."""
+    global _storage
+    with _factory_lock:
+        _storage = storage
+
+
+def key_for(job_id: str) -> str:
+    """One output per job in V1, so the job id is the whole key."""
+    return f"{job_id}.tif"
+
+
+def download_url(job_id: str) -> str:
+    """The 7.5 download route, absolute so it is usable off-host."""
+    return f"{PUBLIC_BASE_URL.rstrip('/')}/api/v1/jobs/{job_id}/download"

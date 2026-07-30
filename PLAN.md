@@ -461,15 +461,63 @@ two the metadata gets wrong.
 
 **Implementation** (`processing/harmonize.py`):
 
-1. `detect_offset_in_scene(band_url)` reads a **decimated overview of the full tile** — a few
-   hundred KB — not the AOI window. A small AOI of uniformly bright bare soil has no dark pixels
-   either way and would be misread; the 110 km tile reliably contains water or shadow.
+1. `detect_offset_in_scene(band_url)` reads a **decimated overview of the full tile**, not the AOI
+   window. A small AOI of uniformly bright bare soil has no dark pixels either way and would be
+   misread; the 110 km tile reliably contains water or shadow. **How far it decimates turned out
+   to matter as much as the threshold — see §5.3.1.**
 2. Pixels take precedence. Metadata is retained **only as a cross-check that logs on
    disagreement**, so drift in the provider's conventions stays visible.
 3. Fewer than 10,000 valid sample pixels → **fail**, do not judge the convention from a handful.
 
 > **Open check:** `sentinel-2-c1-l2a` exposes no flag at all. The detector works there too, since
 > it reads pixels — but measure before ever using c1-l2a.
+
+## 5.3.1 The threshold was calibrated at one sampling density and applied at another
+
+**Found 2026-07-31, by the first real NDVI job failing.** The measured separation above —
+0.00 % against 3.48 %–8.17 % — is real, but it was measured at (or near) full resolution, while
+`detect_offset_in_scene` shipped with `decimation=32`. Overviews are built by **averaging**, and
+averaging pulls dark pixels up toward their bright neighbours, so the dark tail the detector
+measures shrinks as decimation grows. Re-measured over tile 45QXF, nine scenes 2020–2026:
+
+| decimation | offset present | offset absent | where the 1 % threshold falls |
+|---|---|---|---|
+| 4 | 0.000 % | 1.927 %–2.955 % | below every absent scene — **clean** |
+| 8 | 0.000 % | 1.207 %–1.982 % | 0.21 pp of margin — thin |
+| 16 | 0.000 % | 0.751 %–1.442 % | **inside** the absent range — broken |
+| 32 *(shipped)* | 0.000 % | 0.744 %–1.422 % | **inside** the absent range — broken |
+
+At 32, **four of eight offset-absent scenes fell below the threshold** and were classified as
+offset-bearing. `S2C_45QXF_20260227_0_L2A` measured 0.976 % — twenty-four thousandths of a
+percentage point on the wrong side — and subtracting an offset that was not there produced
+**93 % negative reflectance and a median NDVI of +1.703**.
+
+Ground truth was established from physics rather than from the rule under test: surface
+reflectance cannot be meaningfully negative, so the assumption that keeps NDVI inside [−1, 1] is
+the true one. The 2022 scene needed a different discriminator, because subtracting 1000 from
+values that all exceed 1000 leaves everything in range — there the **floor** settles it
+(min 918 DN, versus min 1 DN on an offset-absent scene).
+
+`DEFAULT_DECIMATION` is now **4**, with the table above recorded beside it. Cost: ~7 s against
+~0.5 s, paid once per scene ever and cached (§8).
+
+**Two consequences worth stating plainly.**
+
+*Every offset decision recorded before this fix is untrustworthy* and cannot be repaired row by
+row — you cannot tell which happened to be right. Migration `0003` nulls
+`scenes.boa_offset_present`, and the JSON cache filename is versioned so old entries are ignored
+rather than reused. A NULL costs one re-measurement; a wrong value silently shifts every index
+computed from that scene.
+
+*The guard is what caught this.* §5.3's own lesson — that `normalized_difference` must raise
+rather than log — is the only reason this surfaced as a failed job instead of a plausible-looking
+raster with a systematic bias. It fired on the first real scene it was pointed at. **The lesson
+paid for itself within one commit of the code it was written to protect.**
+
+**And a third lesson, new:** a calibration is only valid for the sampling that produced it. The
+threshold, the statistic and the sample density are one instrument; documenting two of the three
+left the constant that mattered most looking like an implementation detail. `decimation` was a
+default argument in a signature, not a number anyone had reasoned about.
 
 **Two engineering lessons, both bought expensively:**
 
@@ -1445,7 +1493,8 @@ watch progress → see the processed raster on the map. End to end, by a strange
 | Redis + RQ, worker container, §4.3 machine with progress | ✅ |
 | `POST /jobs`, `GET /jobs/{id}`, `GET /jobs/{id}/result` | ✅ |
 | §7.3 rejections, §8 caps (AOI, scene count, concurrency, 20/hour) | ✅ |
-| Real indices, object storage (O4), TiTiler, frontend picker | not started |
+| **NDVI / NDWI / NDBI as real processes, COG out** | ✅ — see below |
+| Object storage (O4), TiTiler, frontend picker, change detection | not started |
 
 The only registered process is **`fake`**: it sleeps ~10 s, walks all five stages, and produces
 no raster. Submitting `ndvi` today returns `400 Unknown process 'ndvi'. Available: fake.` That
@@ -1484,6 +1533,47 @@ and the timeout is a timer rather than a killed child. Development only; the con
 **Redis carries no persistence and is not asked to.** The `jobs` table is the source of truth
 (§6), so a lost queue costs in-flight work — which the state machine already has to survive —
 rather than history.
+
+### Progress, 2026-07-31 — real NDVI, end to end on the deployment
+
+`ndvi`, `ndwi` and `ndbi` are registered processes calling `pipeline.compute_index`. Verified on
+the compose stack against live Sentinel-2: submit → poll → `completed` in **11 s** → a
+940 KB Cloud-Optimized GeoTIFF over `/download`.
+
+```
+scene   S2C_45QXF_20260227_0_L2A   AOI ~25 km2, New Town / Rajarhat
+ndvi    median +0.332   range -0.295 .. +0.811   valid_fraction 0.99998
+COG     EPSG:32645, 10 m, 519x449, tiled 512, deflate, overviews [2]
+        validate_cog -> (True, []),  nodata -9999 declared, 4 pixels masked
+tags    BHOOMI_BOA_OFFSET_PRESENT=False  BHOOMI_SOURCE_SCENES=S2C_45QXF_20260227_0_L2A
+```
+
+**§11's prediction held.** "Port the `processing/` library in as-is — it should need no changes,
+which is the payoff for keeping it web-free." Nothing under `processing/` or `catalogue/` changed
+to make the queue drive it. The only new code is the genuinely web-shaped part: publishing the
+file and describing it for §7.5. The one edit to `processing/` was a *bug fix* found by running
+it (§5.3.1), not an accommodation to the caller.
+
+**Storage is a seam, not a decision (D5, O4).** `backend/storage.py` is a Protocol with a
+local-filesystem backend; `cog_uri` is a URL in both cases, because LocalStorage returns None from
+`url_for` and the caller falls back to the API's `/download` route. When O4 resolves, one class
+changes. **LocalStorage is single-host by construction** — the worker writes and the API serves,
+so compose gives them a shared volume. That constraint is the argument for settling O4 before the
+deployment has more than one box.
+
+**Two bugs that only a real output could expose**, both invisible through the entire fake-process
+phase because `fake` produces no file:
+
+- The named volume was **root-owned** while the container runs as uid 10001. Docker seeds a fresh
+  volume from whatever the image has at that path, so the fix is to create the directory *in the
+  image*, owned by the runtime user, before the mount.
+- `/tmp` and the mounted volume are **different devices**, so `shutil.move` fell back to copying
+  the whole COG. Storage now exposes `scratch_dir()` and the raster is built inside the
+  destination filesystem, making the publish a rename.
+
+`estimated_seconds` for an index is the §8 fit, `3.2 + 2.8 × Mpixels`, plus 6 s for offset
+detection when the scene has not been measured — omitting that term understates a first-time
+job by more than a third.
 
 ---
 

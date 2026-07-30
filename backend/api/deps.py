@@ -7,22 +7,21 @@ the routes.
 
 from __future__ import annotations
 
-import os
 from functools import lru_cache
 
 from backend.api import errors
 from backend.db import SceneStore, default_scene_store
 from backend.db.jobs import JobStore, jobs_available
-from catalogue import Catalogue, EarthSearchCatalogue
-
-CATALOGUE_ENDPOINT = os.getenv("BHOOMI_STAC_ENDPOINT", "")
+from backend.resolve import default_catalogue
+from catalogue import Catalogue
 
 
 @lru_cache(maxsize=1)
 def _default_catalogue() -> Catalogue:
-    if CATALOGUE_ENDPOINT:
-        return EarthSearchCatalogue(endpoint=CATALOGUE_ENDPOINT)
-    return EarthSearchCatalogue()
+    """Cached: the client holds no connection, but rebuilding it per request
+    would discard nothing useful and obscure where the endpoint is chosen.
+    `backend.resolve` is that one place, shared with the worker."""
+    return default_catalogue()
 
 
 def get_catalogue() -> Catalogue:

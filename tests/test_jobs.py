@@ -81,22 +81,37 @@ class TestProcessRegistry:
     def test_fake_is_registered(self):
         assert processes.get("fake") is not None
 
-    def test_the_real_indices_are_not_registered_yet(self):
-        """Deliberate: a job reporting `completed` with no raster would lie."""
-        for name in ("ndvi", "ndwi", "ndbi", "change"):
-            assert processes.get(name) is None
+    def test_the_indices_are_registered(self):
+        for name in ("ndvi", "ndwi", "ndbi"):
+            assert processes.get(name) is not None
+
+    def test_change_is_not_registered_yet(self):
+        """Two-date differencing is February (PLAN.md 11); `pipeline` has it,
+        nothing exposes it."""
+        assert processes.get("change") is None
 
     def test_unknown_process_is_none_not_an_error(self):
         assert processes.get("nonsense") is None
 
-    def test_fake_takes_one_scene(self):
-        assert processes.get("fake").scene_count == 1
+    def test_indices_take_one_scene(self):
+        for name in ("ndvi", "ndwi", "ndbi"):
+            assert processes.get(name).scene_count == 1
 
     def test_estimate_is_at_least_a_second(self):
         assert processes.estimate_for(processes.FAKE, 0.0) >= 1
 
     def test_fake_estimate_matches_its_runtime(self):
         assert processes.estimate_for(processes.FAKE, 251.5) == 10
+
+    def test_an_index_estimate_uses_the_measured_fit(self):
+        """PLAN.md 8: 3.2 + 2.8 x Mpixels, plus 6 s of offset detection."""
+        # 251.5 km2 at 10 m is 2.515 Mpixels -> 3.2 + 7.04 + 6.0 = 16.2
+        assert processes.estimate_for(processes.get("ndvi"), 251.5) == 16
+
+    def test_a_bigger_aoi_estimates_longer(self):
+        small = processes.estimate_for(processes.get("ndvi"), 10.0)
+        large = processes.estimate_for(processes.get("ndvi"), 500.0)
+        assert large > small
 
 
 class TestNormalizeIp:
@@ -413,10 +428,15 @@ class TestSubmission:
         assert args == (resp.json()["job_id"],)
 
     def test_an_unregistered_process_is_rejected(self, api):
-        resp = submit(api, process="ndvi")
+        resp = submit(api, process="ndvvi")
         assert resp.status_code == 400
-        assert "fake" in resp.json()["detail"]["message"]
+        assert "ndvi" in resp.json()["detail"]["message"]
         assert len(api.queue) == 0
+
+    def test_a_real_index_is_accepted_and_estimated(self, api):
+        resp = submit(api, process="ndvi")
+        assert resp.status_code == 202
+        assert resp.json()["estimated_seconds"] == 16
 
     def test_the_wrong_number_of_scenes_is_rejected(self, api):
         resp = submit(api, scene_ids=[SCENE_ID, SCENE_ID])

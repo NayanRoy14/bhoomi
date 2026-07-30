@@ -28,6 +28,14 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_CACHE_DIR = Path(os.getenv("BHOOMI_CACHE_DIR", ".cache"))
 
+#: Bumped when the detector changes, so decisions made by an older one are not
+#: reused. v1 sampled the tile at decimation 32, where averaging has erased the
+#: dark tail the test measures (see harmonize.DEFAULT_DECIMATION); its answers
+#: were wrong for roughly half the scenes tried and cannot be repaired
+#: individually. A new filename discards them without needing to know which.
+#: The database equivalent is migration 0003.
+CACHE_FILENAME = "scene_offsets.v2.json"
+
 
 @runtime_checkable
 class OffsetCache(Protocol):
@@ -76,7 +84,7 @@ class JsonFileOffsetCache(OffsetCache):
     """
 
     def __init__(self, path: str | Path | None = None) -> None:
-        self.path = Path(path) if path else DEFAULT_CACHE_DIR / "scene_offsets.json"
+        self.path = Path(path) if path else DEFAULT_CACHE_DIR / CACHE_FILENAME
         self._lock = threading.Lock()
         self._data: dict[str, bool] | None = None
 

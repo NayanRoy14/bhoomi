@@ -31,12 +31,12 @@ On-demand Earth Observation processing.
 Bhoomi does not display pre-made map layers. It performs geospatial computation
 on demand and returns Cloud-Optimized GeoTIFFs that any GIS tool can consume.
 
-**Currently implemented:** catalogue search, and the asynchronous job queue.
+**Currently implemented:** catalogue search, and asynchronous processing jobs
+producing NDVI, NDWI and NDBI as Cloud-Optimized GeoTIFFs.
 
-The only registered process is `fake`, which sleeps for ten seconds and
-produces no raster. It exists to exercise the queue on its own; the real
-indices land next. Submitting `ndvi` today returns 400, on purpose — a job
-that reported `completed` with nothing behind it would be worse.
+Outputs are written to local disk and served from `/api/v1/jobs/{id}/download`
+until the object-storage decision lands; `cog_uri` is a URL either way. Tile
+serving (TiTiler) and two-date change detection are still to come.
 """
 
 app = FastAPI(

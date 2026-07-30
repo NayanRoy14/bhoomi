@@ -46,6 +46,56 @@ class TestPixelDetector:
             harmonize.detect_offset_in_array(np.full(500, 1800.0))
 
 
+class TestSamplingDensity:
+    """The detector is only as good as the sample it is given.
+
+    Measured 2026-07-31 over tile 45QXF: offset-absent scenes show 1.9%-3.0% of
+    pixels below 700 DN at decimation 4, but only 0.74%-1.44% at 32, because
+    overviews are built by averaging and averaging erases the dark tail. The
+    threshold is 1%, so at 32 the two classes overlap it and four of eight
+    offset-absent scenes were misread as offset-bearing.
+    """
+
+    def test_the_default_decimation_is_low_enough(self):
+        assert harmonize.DEFAULT_DECIMATION <= 8, (
+            "beyond 8, averaging erases the dark tail this detector measures "
+            "and the 1% threshold stops separating the two classes")
+
+    def test_averaging_a_dark_tail_away_flips_the_verdict(self):
+        """Reproduces the real failure without network: same scene, coarser look.
+
+        A tile that is 2.5% dark water reads as offset-absent. Average it in
+        blocks -- which is what an overview is -- and the water is diluted below
+        the threshold, so the same pixels now read as offset-bearing.
+        """
+        n = 400_000
+        dark = int(n * 0.025)
+        full = np.concatenate([np.full(dark, 250.0), np.full(n - dark, 2400.0)])
+        assert harmonize.detect_offset_in_array(full) is False
+
+        # Each output pixel is the mean of 16 inputs; dark pixels are spread
+        # across blocks rather than concentrated, so almost none survive.
+        blocks = full.copy()
+        np.random.default_rng(0).shuffle(blocks)
+        averaged = blocks.reshape(-1, 16).mean(axis=1)
+        assert float((averaged < harmonize.DARK_DN).mean()) < 0.01
+        assert harmonize.detect_offset_in_array(averaged) is True
+
+    def test_a_marginal_sample_warns(self, caplog):
+        """A fraction near the threshold means the sample could not decide."""
+        n = 100_000
+        dark = int(n * 0.011)          # 1.1%, just above the 1% line
+        data = np.concatenate([np.full(dark, 250.0), np.full(n - dark, 2400.0)])
+        with caplog.at_level("WARNING"):
+            harmonize.detect_offset_in_array(data)
+        assert "offset detection" in caplog.text
+
+    def test_a_decisive_sample_does_not_warn(self, caplog):
+        with caplog.at_level("WARNING"):
+            harmonize.detect_offset_in_array(dark_scene())   # 10% dark
+        assert "offset detection" not in caplog.text
+
+
 class TestReflectanceParams:
     def test_pixels_take_precedence_over_metadata(self):
         """The 2025 case: metadata says subtract, pixels say do not."""

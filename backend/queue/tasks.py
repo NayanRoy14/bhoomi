@@ -19,6 +19,9 @@ from rq.timeouts import JobTimeoutException
 
 from backend.db.jobs import IllegalTransition, JobStatus, JobStore
 from backend.queue import processes
+from backend.storage import OutputTooLarge
+from catalogue import CatalogueError
+from pipeline import PipelineError
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +56,19 @@ def run_job(job_id: str) -> str:
         store.advance(job_id, status)
 
     try:
-        spec.run(report, job)
+        outputs = spec.run(report, job) or []
+    except (PipelineError, CatalogueError) as exc:
+        # These refusals are already written for a user -- "AOI is only 38%
+        # inside scene X", "no scene with that id" -- so passing them through
+        # says more than GENERIC_FAILURE would. Both are raised before any
+        # output exists, so there is nothing half-written to clean up.
+        logger.warning("job %s rejected before processing: %s", job_id, exc)
+        _fail(store, job_id, str(exc), None)
+        return JobStatus.FAILED.value
+    except OutputTooLarge as exc:
+        logger.warning("job %s produced too large an output: %s", job_id, exc)
+        _fail(store, job_id, str(exc), None)
+        return JobStatus.FAILED.value
     except JobTimeoutException:
         # RQ's death penalty fires inside the job, so this is the one chance to
         # record it. PLAN.md 8 wants `timed_out`, not a generic failure -- the
@@ -67,8 +82,22 @@ def run_job(job_id: str) -> str:
         _fail(store, job_id, GENERIC_FAILURE, traceback.format_exc())
         raise
 
+    # Outputs are recorded before the job is marked completed, so a client that
+    # sees `completed` and immediately asks for the result never races an
+    # unwritten row. The reverse order would make 7.5 briefly return an empty
+    # outputs array for a successful job, which is indistinguishable from a
+    # process that legitimately produced none.
+    for output in outputs:
+        store.add_output(
+            job_id, output_type=output.output_type, cog_uri=output.cog_uri,
+            bounds=output.bounds, crs=output.crs,
+            resolution_m=output.resolution_m, size_bytes=output.size_bytes,
+            valid_fraction=output.valid_fraction, stats=output.stats,
+            expires_at=output.expires_at,
+        )
+
     store.advance(job_id, JobStatus.COMPLETED)
-    logger.info("job %s completed", job_id)
+    logger.info("job %s completed with %d output(s)", job_id, len(outputs))
     return JobStatus.COMPLETED.value
 
 

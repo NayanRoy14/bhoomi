@@ -22,6 +22,15 @@ services:
       BHOOMI_STAC_ENDPOINT: ${BHOOMI_STAC_ENDPOINT:-}
       BHOOMI_DATABASE_URL: postgresql://bhoomi:${POSTGRES_PASSWORD:-bhoomi}@postgres:5432/bhoomi
       BHOOMI_REDIS_URL: redis://redis:6379/0
+      BHOOMI_OUTPUT_DIR: /app/outputs/jobs
+      # Goes into outputs.cog_uri, so it must be the URL a *client* can reach --
+      # not a compose service name, which resolves only inside the network.
+      BHOOMI_PUBLIC_BASE_URL: ${BHOOMI_PUBLIC_BASE_URL:-http://localhost:8000}
+    volumes:
+      # The worker writes the COG, the API serves it. Shared because
+      # LocalStorage is single-host by construction -- the constraint object
+      # storage removes (PLAN.md O4).
+      - outputs-data:/app/outputs/jobs
     ports:
       - "8000:8000"
     depends_on:
@@ -43,9 +52,13 @@ services:
       BHOOMI_LOG_LEVEL: ${BHOOMI_LOG_LEVEL:-INFO}
       BHOOMI_DATABASE_URL: postgresql://bhoomi:${POSTGRES_PASSWORD:-bhoomi}@postgres:5432/bhoomi
       BHOOMI_REDIS_URL: redis://redis:6379/0
+      BHOOMI_OUTPUT_DIR: /app/outputs/jobs
+      BHOOMI_PUBLIC_BASE_URL: ${BHOOMI_PUBLIC_BASE_URL:-http://localhost:8000}
       # The backend has already migrated by the time this starts; two
       # containers racing to create the same table is a real failure.
       BHOOMI_SKIP_MIGRATIONS: "1"
+    volumes:
+      - outputs-data:/app/outputs/jobs
     # PLAN.md 8 caps concurrent jobs at 2, and that cap is only meaningful if
     # the number of workers matches it.
     deploy:
@@ -119,3 +132,4 @@ services:
 
 volumes:
   postgres-data:
+  outputs-data:

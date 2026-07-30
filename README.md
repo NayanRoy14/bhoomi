@@ -5,9 +5,9 @@
 Bhoomi does not display pre-made map layers. It performs geospatial computation on demand and
 returns a standards-compliant raster product that another GIS tool can consume.
 
-> ⚠️ **Early development.** Scene search works end to end — draw an area, get real Sentinel-2
-> scenes. The job queue works too, but the only process registered so far computes nothing:
-> real server-side processing is the next piece. See [Status](#status).
+> ⚠️ **Early development.** Search and server-side processing both work end to end — draw an
+> area, pick a scene, get an NDVI Cloud-Optimized GeoTIFF back. Tile serving and two-date change
+> detection are still to come. See [Status](#status).
 > Development runs August 2026 – March 2027.
 
 ![NDVI change over New Town / Rajarhat, Kolkata, 2020 to 2026](docs/images/kolkata_change.png)
@@ -83,17 +83,24 @@ makes an OGC API – Processes async execution model natural rather than bolted 
 | Next.js + MapLibre — draw, search, results | **Working** |
 | Docker Compose | **Working** — built and run; backend + postgres verified end to end |
 | PostGIS scene caching + alembic | **Working** — write-through on search, 39 tests |
-| Job queue — Redis + RQ, worker, state machine | **Working**, with one caveat below |
-| Real processing, object storage, TiTiler | Not started |
+| Job queue — Redis + RQ, worker, state machine | **Working** |
+| NDVI / NDWI / NDBI as jobs, COG out | **Working** — verified on live Sentinel-2 |
+| Object storage, TiTiler tiles, change detection | Not started |
 | OGC API – Processes | Not started (February 2027) |
 
-**The queue works; nothing is plugged into it yet.** The only registered process is `fake`,
-which sleeps for ten seconds, reports all five stages, and produces no raster. Submitting
-`ndvi` returns `400 Unknown process 'ndvi'. Available: fake.` — deliberately, because a job
-reporting `completed` with nothing behind it would be a lie in the one field the design asks
-you to trust. Wiring the real indices in is the next piece of work.
+A real NDVI over New Town / Rajarhat, submitted to the deployed stack and finished in 11 s:
 
-228 tests. 61 of them need Postgres or Redis and skip without:
+```
+scene   S2C_45QXF_20260227_0_L2A     AOI ~25 km2
+ndvi    median +0.332   range -0.295 .. +0.811   valid_fraction 0.99998
+COG     EPSG:32645, 10 m, tiled, deflate, overviews, nodata declared -- 940 KB
+```
+
+Outputs are written to local disk and served from `/api/v1/jobs/{id}/download` until the
+object-storage decision lands. `cog_uri` is a URL either way, so nothing downstream has to
+change when it does — but the worker and the API must currently share a filesystem.
+
+278 tests. 62 of them need Postgres or Redis and skip without:
 
 ```bash
 docker run -d --rm --name bhoomi-test-pg -p 55432:5432 \
@@ -159,6 +166,8 @@ backend/      FastAPI -- HTTP and nothing else
   api/errors.py   messages that say what to do about it
   db/             scenes cache, jobs and outputs, alembic migrations
   queue/          RQ setup, the process registry, the worker entry point
+  storage.py      where finished COGs live -- local disk, object storage later
+  resolve.py      scene id -> Scene, cache first, catalogue second
 cache.py      per-scene BOA-offset decisions -- JSON file, or the scenes table
 frontend/     Next.js + MapLibre -- AOI drawing, scene browsing
 catalogue/    STAC client -- no web framework, testable without a server
@@ -174,7 +183,7 @@ processing/   pure raster library -- no web dependencies, importable from a note
   cog.py          COG writing, validation, provenance tags
 examples/     worked analyses over Kolkata
 probes/       measurement scripts -- every empirical claim in PLAN.md is re-runnable
-tests/        228 tests; 61 need Postgres or Redis, the rest need nothing
+tests/        278 tests; 62 need Postgres or Redis, the rest need nothing
 docs/         data-source notes and the Bhoonidhi access request
 PLAN.md       the full project plan, with a live decisions register
 ```
@@ -197,7 +206,21 @@ cannot be meaningfully negative, so a scene carrying the offset has essentially 
 ~800 DN. Measured across seven scenes, the offset-bearing one had 0.00 % of pixels below 700 DN
 and the other six had 3.48–8.17 %.
 
-See [`PLAN.md`](PLAN.md) §5.3.
+**That calibration was right and the code was still wrong.** Those percentages were measured near
+full resolution, but the detector shipped sampling the tile at decimation 32 — and overviews are
+built by *averaging*, which pulls dark pixels up toward their bright neighbours. At 32 the same
+offset-absent scenes measure 0.74–1.42 %, straddling the 1 % threshold; four of eight landed on
+the wrong side. One of them missed by 0.024 of a percentage point, and subtracting an offset that
+was not there produced 93 % negative reflectance and a median NDVI of +1.703.
+
+Two things are worth taking from that. A calibration is only valid for the sampling that produced
+it — the threshold, the statistic and the sample density are one instrument, and `decimation` was
+sitting in a function signature looking like an implementation detail. And the guard is what
+caught it: `normalized_difference` **raises** rather than logs when values leave [−1, 1], which is
+the only reason this surfaced as a failed job rather than a plausible-looking raster with a
+systematic bias.
+
+See [`PLAN.md`](PLAN.md) §5.3 and §5.3.1.
 
 ## Licence and attribution
 

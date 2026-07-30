@@ -12,7 +12,9 @@ import logging
 import uuid
 
 from fastapi import APIRouter, Depends, Request, Response
+from fastapi.responses import FileResponse, RedirectResponse
 
+from backend import storage
 from backend.api import errors, schemas
 from backend.api.deps import get_catalogue, get_job_store, get_scene_store
 from backend.api.ratelimit import client_key, get_job_limiter
@@ -21,7 +23,8 @@ from backend.db.jobs import JobStatus, JobStore, JobsUnavailable, TooManyActiveJ
 from backend.queue import connection as queue_connection
 from backend.queue import processes
 from backend.queue.tasks import run_job
-from catalogue import Catalogue, Scene
+from backend.resolve import resolve_scene
+from catalogue import Catalogue
 from processing import raster_utils
 
 logger = logging.getLogger(__name__)
@@ -31,21 +34,6 @@ router = APIRouter(prefix="/api/v1/jobs", tags=["jobs"])
 #: floating point alone. 0.999 of a 500 km² AOI is half a square kilometre --
 #: below any real scene-boundary crossing, which loses whole percentages.
 COVERAGE_TOLERANCE = 0.999
-
-
-def _resolve_scene(scene_id: str, store: SceneStore, catalogue: Catalogue) -> Scene:
-    """Cache first, catalogue second.
-
-    This is what the scene cache was built for: the ids in a submission came
-    from a search that already wrote them, so the common path costs one local
-    query instead of a STAC round trip. A miss is not an error -- a client may
-    legitimately submit an id it obtained hours ago -- so fall through.
-    """
-    cached = store.get(scene_id)
-    if cached is not None:
-        return cached
-    logger.info("scene %s not cached; asking the catalogue", scene_id)
-    return catalogue.get(scene_id)
 
 
 @router.post("", response_model=schemas.JobCreateResponse, status_code=202,
@@ -92,7 +80,7 @@ def create_job(
     # before the job is created so the rejection is immediate rather than a
     # failure the user has to poll for.
     for scene_id in request.scene_ids:
-        scene = _resolve_scene(scene_id, store, catalogue)
+        scene = resolve_scene(scene_id, store, catalogue)
         coverage = scene.aoi_coverage(aoi)
         if coverage < COVERAGE_TOLERANCE:
             raise errors.aoi_spans_scenes(coverage, scene_id)
@@ -199,6 +187,38 @@ def job_result(job_id: str, jobs: JobStore = Depends(get_job_store)
             for o in outputs
         ],
     )
+
+
+@router.get("/{job_id}/download", summary="Download the output COG",
+            response_class=FileResponse)
+def job_download(job_id: str, jobs: JobStore = Depends(get_job_store)):
+    """Serve the raster itself (PLAN.md 7.5).
+
+    Only meaningful for a storage backend with no public URL of its own -- the
+    local filesystem one. When O4 resolves and outputs live in R2, `url_for`
+    returns a real URL, `cog_uri` points straight at it, and this route
+    redirects rather than streaming bytes through the API.
+    """
+    job = _load(job_id, jobs)
+    if job.status is not JobStatus.COMPLETED:
+        raise errors.result_not_ready(str(job.id), job.status.value, job.progress)
+
+    key = storage.key_for(str(job.id))
+    backend = storage.get_storage()
+
+    direct = backend.url_for(key)
+    if direct:
+        return RedirectResponse(direct, status_code=307)
+
+    path = backend.local_path(key)
+    if path is None:
+        # Completed, but the file is gone: past its 30-day retention (6), or
+        # the worker wrote to a filesystem this process cannot see. Saying so
+        # beats a 500, which would suggest retrying might help.
+        raise errors.output_missing(str(job.id))
+
+    return FileResponse(path, media_type="image/tiff",
+                        filename=f"bhoomi_{job.process}_{job.id}.tif")
 
 
 def _bounds_of(geometry: dict) -> tuple[float, float, float, float]:

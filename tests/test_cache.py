@@ -115,7 +115,7 @@ class TestPipelineIntegration:
     def test_detection_runs_once_then_is_cached(self, monkeypatch):
         calls = []
 
-        def fake_detect(url, decimation=32):
+        def fake_detect(url, decimation=4):
             calls.append(url)
             return True
 
@@ -132,7 +132,7 @@ class TestPipelineIntegration:
 
     def test_a_persisted_false_is_honoured(self, monkeypatch, tmp_path):
         """The 2025 case: pixels say no offset. That must survive a restart."""
-        def explode(url, decimation=32):
+        def explode(url, decimation=4):
             raise AssertionError("should not re-detect a cached scene")
 
         path = tmp_path / "offsets.json"

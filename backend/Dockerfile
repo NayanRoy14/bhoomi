@@ -38,6 +38,14 @@ COPY pipeline.py cache.py alembic.ini ./
 COPY backend/ ./backend/
 RUN chmod +x backend/entrypoint.sh
 
+# The output directory must exist in the IMAGE, owned by the runtime user.
+# Docker seeds a fresh named volume from whatever the image has at that path,
+# ownership included; mounting onto a path the image lacks produces a
+# root-owned volume that a non-root process cannot write to. That failure only
+# appears once a job actually produces a file, which is why it survived the
+# whole fake-process phase.
+RUN mkdir -p /app/outputs/jobs
+
 # Do not run as root.
 RUN useradd --create-home --uid 10001 bhoomi && chown -R bhoomi:bhoomi /app
 USER bhoomi

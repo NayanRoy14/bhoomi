@@ -54,12 +54,34 @@ def parse_baseline(properties: dict) -> float | None:
 #: Detector constants. Derived from physics, not fitted to observations: the
 #: offset is exactly 1000 DN and reflectance cannot be meaningfully below about
 #: -0.02 (-200 DN), so a scene carrying the offset has essentially no pixels
-#: below ~800 DN. 700 keeps margin. Measured separation over 7 Kolkata scenes:
-#: the offset-bearing scene had 0.00% of pixels below 700 DN; the others had
-#: 3.48%-8.17%.
+#: below ~800 DN. 700 keeps margin.
 DARK_DN = 700.0
 DARK_MIN_FRACTION = 0.01
 MIN_SAMPLE_PIXELS = 10_000
+
+#: How far to decimate when sampling the tile, and **the reason the default is
+#: not larger** (measured 2026-07-31, tile 45QXF, nine scenes 2020-2026).
+#:
+#: Overviews are built by *averaging*, which pulls dark pixels up towards their
+#: bright neighbours. The dark tail this detector depends on therefore shrinks
+#: as decimation grows, and the threshold stops separating anything:
+#:
+#:     decimation   offset present   offset absent    threshold 1% is
+#:              4          0.000%     1.927-2.955%    below every absent scene   OK
+#:              8          0.000%     1.207-1.982%    0.21 pp of margin          thin
+#:             16          0.000%     0.751-1.442%    INSIDE the absent range    broken
+#:             32          0.000%     0.744-1.422%    INSIDE the absent range    broken
+#:
+#: The threshold was originally calibrated near full resolution (absent scenes
+#: measured 3.48%-8.17% there) but the function shipped sampling at 32, where
+#: the same scenes measure under 1.5%. Calibrating at one sampling density and
+#: testing at another is what put four of eight offset-absent scenes on the
+#: wrong side of the line, including S2C_45QXF_20260227_0_L2A at 0.976% --
+#: which then produced 93% negative reflectance and a median NDVI of +1.703.
+#:
+#: 4 costs ~7 s against ~0.5 s at 16, paid once per scene ever and cached
+#: (PLAN.md 8). Correctness is worth more than six seconds paid once.
+DEFAULT_DECIMATION = 4
 
 
 def detect_offset_in_array(dn: np.ndarray, nodata: float = 0.0) -> bool:
@@ -76,15 +98,29 @@ def detect_offset_in_array(dn: np.ndarray, nodata: float = 0.0) -> bool:
             f"Only {valid.size} valid pixels; need {MIN_SAMPLE_PIXELS:,} to judge "
             "the reflectance convention reliably."
         )
-    return float((valid < DARK_DN).mean()) < DARK_MIN_FRACTION
+    dark_fraction = float((valid < DARK_DN).mean())
+    present = dark_fraction < DARK_MIN_FRACTION
+
+    # Logged at every call, not only on disagreement: this number is the whole
+    # decision, and the failure it guards against is one where a wrong answer
+    # still looks like a plausible raster. A value close to the threshold means
+    # the sample was marginal and the result should not be trusted quietly.
+    log = logger.warning if 0.5 <= dark_fraction / DARK_MIN_FRACTION <= 1.5 else logger.info
+    log("offset detection: %.3f%% of %d valid pixels below %.0f DN "
+        "(threshold %.1f%%) -> offset_present=%s",
+        dark_fraction * 100, valid.size, DARK_DN, DARK_MIN_FRACTION * 100, present)
+    return present
 
 
-def detect_offset_in_scene(band_url: str, decimation: int = 32) -> bool:
+def detect_offset_in_scene(band_url: str, decimation: int = DEFAULT_DECIMATION) -> bool:
     """Detect the offset from a decimated overview of the FULL scene.
 
-    Reads the COG's built-in overview rather than the AOI window, so the sample
-    spans the whole 110 km tile and reliably contains water or shadow. Costs a
-    few hundred KB.
+    Reads across the whole 110 km tile rather than the AOI window, so the
+    sample reliably contains water or shadow -- a small AOI of uniformly bright
+    bare soil has no dark pixels under either convention.
+
+    See DEFAULT_DECIMATION for why the sample is not decimated further: beyond
+    about 8, averaging has erased the dark tail the test measures.
     """
     import rasterio
 

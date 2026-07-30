@@ -14,12 +14,13 @@ from backend.queue.connection import (
     redis_url,
     reset_connections,
 )
-from backend.queue.processes import ProcessSpec, estimate_for
+from backend.queue.processes import OutputSpec, ProcessSpec, estimate_for
 from backend.queue.tasks import run_job
 
 __all__ = [
     "JOB_TIMEOUT_SECONDS",
     "QUEUE_NAME",
+    "OutputSpec",
     "ProcessSpec",
     "estimate_for",
     "get_queue",
