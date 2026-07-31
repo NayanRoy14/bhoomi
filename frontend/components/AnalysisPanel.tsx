@@ -16,6 +16,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 
+import Legend from "@/components/Legend";
 import {
   ApiError,
   api,
@@ -40,9 +41,17 @@ interface Props {
   aoi: Polygon | null;
   scene: Scene | null;
   onOutput: (output: Output | null) => void;
+  opacity: number;
+  onOpacity: (value: number) => void;
 }
 
-export default function AnalysisPanel({ aoi, scene, onOutput }: Props) {
+export default function AnalysisPanel({
+  aoi,
+  scene,
+  onOutput,
+  opacity,
+  onOpacity,
+}: Props) {
   const [process, setProcess] = useState<string>("ndvi");
   const [job, setJob] = useState<Job | null>(null);
   const [output, setOutput] = useState<Output | null>(null);
@@ -207,7 +216,15 @@ export default function AnalysisPanel({ aoi, scene, onOutput }: Props) {
 
       {error && <p className="error small">{error}</p>}
 
-      {output && <Result output={output} jobId={job!.job_id} />}
+      {output && (
+        <Result
+          output={output}
+          jobId={job!.job_id}
+          process={job!.process}
+          opacity={opacity}
+          onOpacity={onOpacity}
+        />
+      )}
     </section>
   );
 }
@@ -216,13 +233,29 @@ function isRunning(job: Job | null): boolean {
   return job !== null && !isTerminal(job.status);
 }
 
-function Result({ output, jobId }: { output: Output; jobId: string }) {
+function Result({
+  output,
+  jobId,
+  process,
+  opacity,
+  onOpacity,
+}: {
+  output: Output;
+  jobId: string;
+  process: string;
+  opacity: number;
+  onOpacity: (value: number) => void;
+}) {
   const stats = output.stats ?? {};
   const [west, south, east, north] = output.bounds;
 
   return (
     <div className="result">
       <h3>Result</h3>
+
+      {output.tiles && (
+        <Legend process={process} opacity={opacity} onOpacity={onOpacity} />
+      )}
       <dl className="stats">
         {"median" in stats && <Stat label="median" value={stats.median} />}
         {"mean" in stats && <Stat label="mean" value={stats.mean} />}
@@ -246,8 +279,8 @@ function Result({ output, jobId }: { output: Output; jobId: string }) {
 
       {output.tiles === null && (
         <p className="muted small">
-          No map preview yet — that needs the tile server. The download opens in QGIS
-          and carries its own provenance tags.
+          No map preview — the tile server is not configured. The download opens in
+          QGIS and carries its own provenance tags.
         </p>
       )}
     </div>

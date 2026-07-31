@@ -4,11 +4,7 @@
 #
 #   frontend  http://localhost:3000
 #   API       http://localhost:8000       docs at /docs
-#
-# Services arrive with the features that need them, rather than sitting idle:
-#   titiler            with tile serving, once outputs exist (PLAN.md 11)
-# Adding them before anything uses them would only mean containers that can
-# fail without anything noticing.
+#   tiles     http://localhost:8001       TiTiler, loopback only -- see below
 
 services:
   backend:
@@ -26,6 +22,9 @@ services:
       # Goes into outputs.cog_uri, so it must be the URL a *client* can reach --
       # not a compose service name, which resolves only inside the network.
       BHOOMI_PUBLIC_BASE_URL: ${BHOOMI_PUBLIC_BASE_URL:-http://localhost:8000}
+      # Where TiTiler mounts the same volume, and where the browser reaches it.
+      BHOOMI_TILE_ROOT: /app/outputs/jobs
+      BHOOMI_TITILER_URL: ${BHOOMI_TITILER_URL:-http://localhost:8001}
     volumes:
       # The worker writes the COG, the API serves it. Shared because
       # LocalStorage is single-host by construction -- the constraint object
@@ -78,6 +77,33 @@ services:
     depends_on:
       backend:
         condition: service_healthy
+    restart: unless-stopped
+
+  titiler:
+    # Reads the COGs the worker wrote and serves XYZ tiles (PLAN.md 11).
+    image: ghcr.io/developmentseed/titiler:latest
+    environment:
+      # Same GDAL tuning as the backend: without it a windowed read becomes a
+      # slow scan, and a tile server issues a great many windowed reads.
+      GDAL_DISABLE_READDIR_ON_OPEN: EMPTY_DIR
+      GDAL_HTTP_MULTIPLEX: "YES"
+      VSI_CACHE: "TRUE"
+      VSI_CACHE_SIZE: "67108864"
+      # The browser calls this directly, so CORS has to allow the frontend.
+      TITILER_API_CORS_ORIGINS: ${BHOOMI_CORS_ORIGINS:-http://localhost:3000}
+    volumes:
+      # Read-only: the tile server has no business writing outputs.
+      - outputs-data:/app/outputs/jobs:ro
+    ports:
+      # **Loopback only, deliberately.** TiTiler opens whatever path its `url`
+      # parameter names, and while outputs live on a filesystem that makes a
+      # public tile server an arbitrary-file-read. Binding to 127.0.0.1 keeps
+      # it reachable from the browser on this machine and from nowhere else.
+      # Object storage (PLAN.md O4) removes the exposure rather than hiding it:
+      # `tile_source` becomes an https URL and this volume goes away.
+      #
+      # The image serves on 80 under gunicorn, not 8000 like the backend.
+      - "127.0.0.1:8001:80"
     restart: unless-stopped
 
   redis:

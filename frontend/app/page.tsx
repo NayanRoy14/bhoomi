@@ -36,6 +36,9 @@ export default function Page() {
   const [error, setError] = useState<string | null>(null);
   const [health, setHealth] = useState<Health | null>(null);
   const [output, setOutput] = useState<Output | null>(null);
+  //  Below 1 so the basemap shows through -- an index raster with no
+  //  landmarks under it is hard to place.
+  const [opacity, setOpacity] = useState(0.75);
 
   const selectedScene = scenes.find((s) => s.id === selectedId) ?? null;
 
@@ -112,7 +115,13 @@ export default function Page() {
           areaKm2={areaKm2}
         />
 
-        <AnalysisPanel aoi={aoi} scene={selectedScene} onOutput={setOutput} />
+        <AnalysisPanel
+          aoi={aoi}
+          scene={selectedScene}
+          onOutput={setOutput}
+          opacity={opacity}
+          onOpacity={setOpacity}
+        />
 
         <footer className="foot">
           {health ? (
@@ -135,8 +144,7 @@ export default function Page() {
           <span className="muted">Contains modified Copernicus Sentinel data</span>
           <br />
           <span className="muted small">
-            Results download as Cloud-Optimized GeoTIFF. Map preview needs the tile
-            server, which is not built yet.
+            Results render as map tiles and download as Cloud-Optimized GeoTIFF.
           </span>
         </footer>
       </aside>
@@ -150,6 +158,8 @@ export default function Page() {
         selectedSceneId={selectedId}
         onSelectScene={setSelectedId}
         outputBounds={output?.bounds ?? null}
+        outputTiles={output?.tiles ?? null}
+        outputOpacity={opacity}
       />
     </main>
   );

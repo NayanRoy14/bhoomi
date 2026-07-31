@@ -14,7 +14,7 @@ import uuid
 from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import FileResponse, RedirectResponse
 
-from backend import storage
+from backend import storage, tiles
 from backend.api import errors, schemas
 from backend.api.deps import get_catalogue, get_job_store, get_scene_store
 from backend.api.ratelimit import client_key, get_job_limiter
@@ -174,6 +174,12 @@ def job_result(job_id: str, jobs: JobStore = Depends(get_job_store)
         raise errors.job_failed(str(job.id), job.status.value, job.error_message)
 
     outputs = jobs.outputs_for(job.id)
+    # Built here rather than stored on the row: the tile server's address and
+    # the colour ramp are deployment configuration, and baking them into a
+    # 30-day-lived row would mean old outputs pointing at a tile server that
+    # has since moved.
+    source = storage.get_storage().tile_source(storage.key_for(str(job.id)))
+
     return schemas.JobResultResponse(
         job_id=str(job.id),
         outputs=[
@@ -183,6 +189,7 @@ def job_result(job_id: str, jobs: JobStore = Depends(get_job_store)
                 bounds=list(_bounds_of(o.bounds)), crs=o.crs,
                 resolution_m=o.resolution_m, valid_fraction=o.valid_fraction,
                 stats=o.stats, expires_at=o.expires_at,
+                tiles=tiles.tiles_url(job.process, source),
             )
             for o in outputs
         ],

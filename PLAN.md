@@ -1595,6 +1595,43 @@ the drawn AOI, and seeing that is the difference between trusting the result and
 NDVI → watch progress → see the processed raster on the map" — everything but the last clause,
 which is TiTiler. And "on the public deployment", which is O3.
 
+### Progress, 2026-07-31 — TiTiler, and the last clause
+
+The raster now renders on the map. Driven in a browser: NDVI over Rajarhat, 7 Feb 2026,
+**median +0.542, mean +0.500, 99.7 % valid** — and the tiles show field boundaries, roads and
+drainage, not a flat wash. A `Legend` gives the ramp, both ends and an opacity slider (verified
+at 21 %, basemap showing through).
+
+**Everything in §11's exit criterion now works except "on the public deployment" (O3).**
+
+**Tiles are served from the volume, not through the API.** TiTiler reads the COG directly at a
+path both containers mount. Routing tiles through `/download` would have been closer to the
+eventual object-storage shape, but a single map view is dozens of tile requests and each one
+would cost a database lookup and a poll-budget charge — the same collision §7.4 and §8 already
+had once. `Storage.tile_source()` is the seam: a path today, an https URL when O4 lands, and the
+tile server stops touching a filesystem.
+
+> **TiTiler is bound to `127.0.0.1` deliberately.** It opens whatever path its `url` parameter
+> names, so a publicly reachable tile server pointed at a filesystem is an arbitrary-file-read.
+> That is acceptable on one box behind loopback and **not** acceptable on the O3 VPS. O4 removes
+> the exposure rather than mitigating it. **Do not publish the tile server before O4 is settled.**
+
+**Rescale is fixed at [−1, 1], not per-image.** TiTiler will happily stretch each tile to its own
+min/max, which looks better and means less: two dates of the same AOI would get different scales,
+so a visual comparison would measure the stretch rather than the ground. Normalised indices are
+bounded by construction, so a fixed range is both honest and comparable — and it is what makes
+February's swipe comparison mean anything.
+
+**`raster-resampling: nearest`.** These are measured 10 m values; smoothing between them invents
+intermediate readings that were never taken.
+
+**The colour ramp is duplicated** in `frontend/components/Legend.tsx`, because the browser cannot
+ask matplotlib what `rdylgn` looks like. That is a second hand-mirrored contract alongside
+`lib/api.ts` — worth folding into the February OpenAPI generation.
+
+**One bug:** the image serves on port **80** under gunicorn, not 8000 like the backend, so the
+first mapping produced a container that was up and unreachable.
+
 **Three bugs, all found by using it rather than by testing it:**
 
 - **§7.4 and §8 contradicted each other.** Polling at 2 s against a 120/hour budget is four

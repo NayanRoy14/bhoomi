@@ -44,6 +44,10 @@ interface Props {
   onSelectScene: (id: string | null) => void;
   /** [west, south, east, north] of a finished raster, or null. */
   outputBounds: number[] | null;
+  /** XYZ template for the finished raster, or null when there is no tile server. */
+  outputTiles: string | null;
+  /** 0-1. Lets the basemap show through so features stay locatable. */
+  outputOpacity: number;
 }
 
 export default function MapView({
@@ -55,6 +59,8 @@ export default function MapView({
   selectedSceneId,
   onSelectScene,
   outputBounds,
+  outputTiles,
+  outputOpacity,
 }: Props) {
   const container = useRef<HTMLDivElement>(null);
   const map = useRef<MapLibreMap | null>(null);
@@ -327,6 +333,57 @@ export default function MapView({
       },
     });
   }, [outputBounds, ready]);
+
+  /* ------------------------------------------------------- result raster */
+
+  useEffect(() => {
+    const m = map.current;
+    if (!m || !ready) return;
+
+    const ID = "output-raster";
+    // Rebuilt rather than mutated: a raster source's tile template is fixed at
+    // creation, and each job has its own.
+    if (m.getLayer(ID)) m.removeLayer(ID);
+    if (m.getSource(ID)) m.removeSource(ID);
+    if (!outputTiles) return;
+
+    const bounds =
+      outputBounds && outputBounds.length === 4
+        ? (outputBounds as [number, number, number, number])
+        : undefined;
+
+    m.addSource(ID, {
+      type: "raster",
+      tiles: [outputTiles],
+      tileSize: 256,
+      // Without this MapLibre requests tiles for the whole world at every
+      // zoom; the raster covers a few kilometres.
+      bounds,
+    });
+    m.addLayer(
+      {
+        id: ID,
+        type: "raster",
+        source: ID,
+        paint: {
+          "raster-opacity": outputOpacity,
+          // Nearest, not linear: these are measured 10 m values, and smoothing
+          // between them invents intermediate readings that were never taken.
+          "raster-resampling": "nearest",
+        },
+      },
+      // Under the AOI outline and footprints, so the geometry stays visible.
+      m.getLayer("footprint-fill") ? "footprint-fill" : undefined,
+    );
+  }, [outputTiles, outputBounds, ready]);
+
+  // Separate from the layer's construction so dragging the slider adjusts the
+  // existing layer instead of tearing it down and refetching every tile.
+  useEffect(() => {
+    const m = map.current;
+    if (!m || !ready || !m.getLayer("output-raster")) return;
+    m.setPaintProperty("output-raster", "raster-opacity", outputOpacity);
+  }, [outputOpacity, ready, outputTiles]);
 
   return (
     <div className="map-wrap">

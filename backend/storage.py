@@ -60,6 +60,17 @@ class Storage(Protocol):
     def local_path(self, key: str) -> Path | None:
         """A readable path, or None for backends that are not filesystems."""
 
+    def tile_source(self, key: str) -> str | None:
+        """What to hand a tile server so it can read this object, or None.
+
+        Not the same as `url_for`. A tile server reads the COG directly, over
+        many small range requests per tile; `url_for` is what a *client* is
+        given. For object storage the two coincide. For the local filesystem
+        they do not: the tile server shares the volume and reads the path,
+        which avoids routing every tile through the API -- where each one would
+        cost a database lookup and a rate-limiter charge.
+        """
+
     def scratch_dir(self) -> Path | None:
         """Where to build an object so that storing it is cheap, or None.
 
@@ -100,6 +111,25 @@ class LocalStorage(Storage):
     def local_path(self, key: str) -> Path | None:
         path = self._path(key)
         return path if path.exists() else None
+
+    def tile_source(self, key: str) -> str | None:
+        """The path as the tile server sees it.
+
+        `BHOOMI_TILE_ROOT` exists because the two containers mount the same
+        volume and need not mount it at the same place. It defaults to this
+        backend's own root, which is what compose arranges.
+
+        **This hands the tile server a filesystem root.** TiTiler will open
+        whatever path it is given, so it must not be reachable from outside the
+        deployment while this is how it reads outputs -- compose binds it to
+        127.0.0.1 for that reason. Object storage (PLAN.md O4) removes the
+        problem rather than mitigating it: `tile_source` becomes an https URL
+        and the tile server stops touching a filesystem at all.
+        """
+        if self.local_path(key) is None:
+            return None
+        root = os.getenv("BHOOMI_TILE_ROOT") or str(self.root)
+        return f"{root.rstrip('/')}/{key}"
 
     def scratch_dir(self) -> Path | None:
         """Inside the root, so `put` is a rename rather than a copy.

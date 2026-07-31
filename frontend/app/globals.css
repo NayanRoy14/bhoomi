@@ -478,3 +478,36 @@ a.primary.block {
 a.primary.block:hover {
   background: var(--accent-hover);
 }
+
+/* --------------------------------------------------------------- legend */
+
+.legend {
+  margin-bottom: 12px;
+}
+
+.ramp {
+  height: 10px;
+  border-radius: 3px;
+  border: 1px solid var(--border);
+}
+
+.ramp-ends {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-top: 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 11px;
+}
+
+.ramp-ends.muted {
+  font-family: inherit;
+}
+
+.legend .opacity {
+  margin-top: 10px;
+}
+
+.legend .opacity input[type="range"] {
+  margin-top: 4px;
+}

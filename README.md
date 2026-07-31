@@ -5,9 +5,9 @@
 Bhoomi does not display pre-made map layers. It performs geospatial computation on demand and
 returns a standards-compliant raster product that another GIS tool can consume.
 
-> ⚠️ **Early development.** Search and server-side processing both work end to end — draw an
-> area, pick a scene, get an NDVI Cloud-Optimized GeoTIFF back. Tile serving and two-date change
-> detection are still to come. See [Status](#status).
+> ⚠️ **Early development.** Search and server-side processing work end to end — draw an area,
+> pick a scene, watch NDVI run, see it on the map, download the Cloud-Optimized GeoTIFF. Not yet
+> deployed publicly, and two-date change detection is still to come. See [Status](#status).
 > Development runs August 2026 – March 2027.
 
 ![NDVI change over New Town / Rajarhat, Kolkata, 2020 to 2026](docs/images/kolkata_change.png)
@@ -85,7 +85,8 @@ makes an OGC API – Processes async execution model natural rather than bolted 
 | PostGIS scene caching + alembic | **Working** — write-through on search, 39 tests |
 | Job queue — Redis + RQ, worker, state machine | **Working** |
 | NDVI / NDWI / NDBI as jobs, COG out | **Working** — verified on live Sentinel-2 |
-| Object storage, TiTiler tiles, change detection | Not started |
+| TiTiler — results rendered on the map | **Working** — loopback only, see below |
+| Object storage, change detection | Not started |
 | OGC API – Processes | Not started (February 2027) |
 
 A real NDVI over New Town / Rajarhat, submitted to the deployed stack and finished in 11 s:
@@ -96,16 +97,24 @@ ndvi    median +0.332   range -0.295 .. +0.811   valid_fraction 0.99998
 COG     EPSG:32645, 10 m, tiled, deflate, overviews, nodata declared -- 940 KB
 ```
 
-The browser closes the loop too: draw an area, search, pick a scene, pick a process, watch
-live progress, download the result. The one thing it will not do is paint the raster on the
-map — that needs the tile server, so the map shows the output's extent and the panel shows its
-statistics.
+The browser closes the loop: draw an area, search, pick a scene, pick a process, watch live
+progress, see the result rendered on the map with a legend and an opacity slider, and download
+the GeoTIFF.
+
+Tiles are rescaled to a fixed [-1, 1] rather than stretched per image. A per-image stretch looks
+better and means less — two dates of the same area would get different scales, so comparing them
+visually would measure the stretch rather than the ground.
+
+> ⚠️ **The tile server is bound to `127.0.0.1` on purpose.** While outputs live on a filesystem,
+> TiTiler will open whatever path it is given, so a publicly reachable tile server is an
+> arbitrary-file-read. Object storage removes this rather than mitigating it. Do not expose the
+> tile server before that lands.
 
 Outputs are written to local disk and served from `/api/v1/jobs/{id}/download` until the
 object-storage decision lands. `cog_uri` is a URL either way, so nothing downstream has to
 change when it does — but the worker and the API must currently share a filesystem.
 
-285 tests. 64 of them need Postgres or Redis and skip without:
+301 tests. 64 of them need Postgres or Redis and skip without:
 
 ```bash
 docker run -d --rm --name bhoomi-test-pg -p 55432:5432 \
@@ -126,6 +135,7 @@ cp .env.example .env
 docker compose up --build
 #  frontend  http://localhost:3000
 #  API       http://localhost:8000/docs
+#  tiles     http://localhost:8001      (loopback only -- see the warning above)
 ```
 
 Or without Docker:
@@ -172,6 +182,7 @@ backend/      FastAPI -- HTTP and nothing else
   db/             scenes cache, jobs and outputs, alembic migrations
   queue/          RQ setup, the process registry, the worker entry point
   storage.py      where finished COGs live -- local disk, object storage later
+  tiles.py        TiTiler URL shape and the colour ramp per index
   resolve.py      scene id -> Scene, cache first, catalogue second
 cache.py      per-scene BOA-offset decisions -- JSON file, or the scenes table
 frontend/     Next.js + MapLibre -- AOI drawing, scene browsing, analysis
@@ -188,7 +199,7 @@ processing/   pure raster library -- no web dependencies, importable from a note
   cog.py          COG writing, validation, provenance tags
 examples/     worked analyses over Kolkata
 probes/       measurement scripts -- every empirical claim in PLAN.md is re-runnable
-tests/        285 tests; 64 need Postgres or Redis, the rest need nothing
+tests/        301 tests; 64 need Postgres or Redis, the rest need nothing
 docs/         data-source notes and the Bhoonidhi access request
 PLAN.md       the full project plan, with a live decisions register
 ```
