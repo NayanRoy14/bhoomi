@@ -547,9 +547,18 @@ the UI to signal it.
 real ~0.014 difference, because the *atmospheric correction algorithm itself* changed between
 Sen2Cor versions, not merely the storage convention. Per-pixel differences reach ±3900 DN.
 
-That has a direct consequence for §5.4.4: **a change-detection job must not mix processing
-baselines across its two dates**, or part of the "change" is Sen2Cor version drift. Record
-`s2:processing_baseline` on every output (§5.6) and warn in the UI when the two scenes differ.
+That has a direct consequence for §5.4.4: mixing processing baselines across the two dates puts
+Sen2Cor version drift into the "change". Record `s2:processing_baseline` on every output (§5.6)
+and warn in the UI when the two scenes differ.
+
+> **Corrected 2026-07-31.** This rule used to read "a change-detection job **must not** mix
+> processing baselines". That is unsatisfiable, and it forbade this project's own flagship demo.
+> Measured over the D13 AOI: 2020 is served only at baseline **02.14 or 05.00**, and 2026 only at
+> **05.12** — there is no matched pair across the span, because the baseline records when the
+> product was *processed*, not when it was acquired. Any multi-year comparison on this collection
+> mixes baselines by construction. The rule is therefore **must not mix them silently**, which is
+> what the implementation does: warn, record both baselines in the output, and let the user
+> decide. D11's pair is 05.00 against 05.12 and always was.
 
 It also means the earlier idea of using the two versions as an exact-equality regression test
 is **invalid** — they are legitimately different products. Keep the synthetic fixture test for
@@ -1777,6 +1786,54 @@ pair can still be a full month of growth.
 
 Same shape as §5.3.1's lesson, in miniature: a proxy stood in for the quantity actually being
 reasoned about, and it went unnoticed until real data crossed the boundary.
+
+### The demo pair, run through the stack — 2026-07-31
+
+D11's pair over D13's AOI, submitted as an ordinary job rather than a probe script:
+
+```
+S2A_45QXF_20200310_1_L2A  ->  S2B_45QXF_20260304_0_L2A
+251.5 km2, both 0.000 % cloud, 17 s, valid 0.9966
+
+mean -0.02744   median -0.01297
+loss  9.747 %   gain 3.264 %   ->  asymmetry 2.99 : 1
+```
+
+**This reproduces §5.4.4's measured figures to three significant figures** — the plan recorded
+mean −0.027, loss 9.73 %, gain 3.26 %, ratio 3:1, measured on 2026-07-30 by
+`probes/verify_change.py`. Reaching the same numbers through an entirely different path (queue →
+worker → process registry → object storage) is the strongest evidence so far that the stack does
+what the library does.
+
+**It is not evidence that §5.3.1's detector fix was right.** Both of these scenes measured
+1.279 % and 1.258 % dark fraction at the old decimation of 32 — comfortably above the 1 %
+threshold — so the old detector classified them correctly too. The fix changed *other* scenes,
+`S2C_45QXF_20260227_0_L2A` at 0.976 % among them. What this run does show is that the fix did not
+perturb the demo, which is worth knowing separately.
+
+### Spatial coherence, measured rather than asserted
+
+§5.4.4 calls the spatial structure of the loss "the strongest evidence", on the argument that
+sensor drift would speckle uniformly while real change follows human geometry. That had been
+argued from looking at a rendered PNG. Measured on the change raster, as the fraction of adjacent
+pixel pairs where **both** are in the mask, against the same pixels shuffled:
+
+| mask | observed | shuffled control | clustering |
+|---|---|---|---|
+| loss > 0.2 | 6.590 % | 0.948 % | **7.0×** |
+| gain > 0.2 | 1.938 % | 0.106 % | **18.4×** |
+
+Loss is seven times more clustered than chance. That is the §5.4.4 claim, now a number.
+
+**But gain is clustered too — more so.** That refines the asymmetry argument rather than
+supporting it. §5.4.4 reasons that "noise moves both directions roughly equally", so a lopsided
+ratio is evidence of real change. If the gain were noise it would be spatially unstructured, and
+it is emphatically not: at 18× it is *more* spatially organised than the loss. So the 3:1 is not
+signal against noise — it is **two real signals of different size**, one of which is presumably
+cropping cycles, water and regrowth. The asymmetry still says something, but it says "more land
+lost vegetation than gained it", not "the gain is measurement error".
+
+That is a smaller claim than the one §5.4.4 makes, and it is the one the data supports.
 
 **Three bugs, all found by using it rather than by testing it:**
 
