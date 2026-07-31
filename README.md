@@ -5,14 +5,20 @@
 Bhoomi does not display pre-made map layers. It performs geospatial computation on demand and
 returns a standards-compliant raster product that another GIS tool can consume.
 
-> ⚠️ **Early development.** Search and server-side processing work end to end — draw an area,
-> pick a scene, run an index or difference two dates, see it on the map, download the
-> Cloud-Optimized GeoTIFF. **Not yet deployed publicly.** See [Status](#status).
-> Development runs August 2026 – March 2027.
+### ▶ Try it: **[bhoomi-site.onrender.com](https://bhoomi-site.onrender.com)** · API at **[bhoomi-api.onrender.com](https://bhoomi-api.onrender.com/docs)**
+
+Draw an area, search Sentinel-2, run an index, download the GeoTIFF. No sign-up.
+
+> ⚠️ **Early development, and deployed on a free tier** — which is visible in how it behaves.
+> The API **sleeps after 15 minutes**, so the first request takes about 40 seconds; it has not
+> crashed. Downloads live on an **ephemeral disk**, so a result link stops working after a
+> restart — download it while you are there. There is **no tile server**, so the map preview is
+> absent and the UI says so rather than offering a dead link.
 >
-> Two deployment paths are written and ready but neither has been run:
-> [`docs/deploy.md`](docs/deploy.md) (a VM, full stack, tiles included) and
-> [`docs/deploy-render.md`](docs/deploy-render.md) (a free tier, with the compromises named).
+> None of those are properties of Bhoomi; they are what a deployment with no payment method
+> costs. [`docs/deploy-render.md`](docs/deploy-render.md) explains each and what fixes it, and
+> [`docs/deploy.md`](docs/deploy.md) is the deployment without the compromises.
+> See [Status](#status). Development runs August 2026 – March 2027.
 
 ![NDVI change over New Town / Rajarhat, Kolkata, 2020 to 2026](docs/images/kolkata_change.png)
 
@@ -142,6 +148,7 @@ three wrong answers to reach — see [below](#a-note-on-the-hard-part).
 | Before/after swipe | **Working** — a change job publishes both dates as well as the difference |
 | CI — tests, migrations, harmonization gate | **Working** — 5 jobs, integration runs all 418 tests with no skips |
 | OGC API – Processes Part 1: Core | **Working** — `examples/ogc_client.py` executes and downloads by following links from the landing page |
+| Public deployment | **Live**, free tier — [site](https://bhoomi-site.onrender.com), [API docs](https://bhoomi-api.onrender.com/docs). Verified by driving the browser end to end and by `ogc_client.py`; see the note at the top for what the free tier costs. |
 
 A real NDVI over New Town / Rajarhat, submitted to the deployed stack and finished in 11 s:
 
