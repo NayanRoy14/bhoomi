@@ -2149,6 +2149,47 @@ job cancellation · structured logging with job IDs · nightly cleanup of expire
 **Exit criterion:** the Kolkata NDVI-change-2020-vs-2026 result renders in a swipe comparison,
 and the same result is reproducible from a 15-line Python script hitting `/ogc`.
 
+> **Swipe done 2026-07-31. The `/ogc` half is not.**
+>
+> **What it needed that was missing.** A difference raster cannot be un-differenced: +0.3 could be
+> bare ground becoming scrub or forest becoming denser forest, and only the two dates tell them
+> apart. A change job published *one* raster, so there was nothing to swipe between. It now
+> publishes three — the difference, then `earlier_<index>` and `later_<index>` — which costs no
+> extra computation, because `compute_change` already holds both index arrays when it forms the
+> difference. It costs two more COG writes and two more objects under the 30-day retention.
+>
+> **Three consequences worth recording.**
+>
+> *`key_for` is no longer one key per job.* It takes an optional variant; `None` keeps the job id
+> alone as the key, so every `cog_uri` already written stays resolvable. `?output=earlier|later`
+> selects a side on the download route, against a **closed** set — the value reaches a storage key,
+> and an unbounded one there is a path the caller chooses.
+>
+> *The colour ramp follows the raster, not the job.* Rendering an NDVI raster with the change ramp
+> would put a healthy field in the brown "vegetation lost" half of the scale — wrong in the one way
+> a ramp can be, by inverting the reading. `tiles.render_key` derives it from `output_type`, which
+> is why the per-date outputs carry the index in their name.
+>
+> *A failed side must not lose the difference.* The two per-date rasters are published inside a
+> `try`, because a job that threw away a completed analysis when a supplementary render failed
+> would be trading the answer for a picture.
+>
+> **The swipe itself is two MapLibre instances**, cameras synchronised, the top one CSS-clipped to
+> the left of a draggable handle. MapLibre cannot clip one layer against a screen-space line, and
+> `raster-opacity` cross-fades rather than wipes — a cross-fade of two similar rasters shows
+> nothing. So the divide has to happen outside the canvas, which means two canvases and a second
+> set of basemap tiles. Keyboard-operable, because a drag-only control is unusable to anyone who
+> cannot drag.
+>
+> **Verified against the running stack**, not just typechecked: the demo job returns three outputs,
+> all three serve real PNG tiles from TiTiler at z11 (44 107 / 57 634 / 55 729 bytes — distinct
+> rasters, not one file served thrice), the change raster renders `brbg` while both index rasters
+> render `rdylgn`, all three share one 1762×1457 grid so the swipe registers pixel-for-pixel, and
+> each carries its own scenes in `BHOOMI_SOURCE_SCENES`. `?output=bogus` and `?output=../etc/passwd`
+> both return 400. Earlier NDVI median **0.3241**, later **0.3029** — the earlier figure matching
+> the 0.323 recorded in §5.3 for that scene from an independent measurement. The change statistics
+> are unmoved: loss 9.747 %, gain 3.264 %, asymmetry 2.99, mean −0.0274.
+
 ---
 
 ## MARCH 2027 — Milestone 4: portfolio release

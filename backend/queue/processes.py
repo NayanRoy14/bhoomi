@@ -136,7 +136,8 @@ def _bounds_wgs84(grid) -> dict:
 
 
 def _publish(result, job: Job, *, output_type: str, stats: dict,
-             valid_fraction: float, warnings: list[str]) -> OutputSpec:
+             valid_fraction: float, warnings: list[str],
+             variant: str | None = None) -> OutputSpec:
     """Write the COG, move it into storage, and describe it.
 
     Written to a scratch file first because rasterio writes to a path, and COG
@@ -147,8 +148,11 @@ def _publish(result, job: Job, *, output_type: str, stats: dict,
     because an index and a change raster summarise themselves differently: an
     index reports a distribution, a change raster reports loss against gain
     (§5.4.4). Only `write` and `grid` are common to both.
+
+    `variant` is None for a job's primary output, which keeps its key on the
+    job id alone. A change job's two per-date rasters pass one.
     """
-    key = storage.key_for(str(job.id))
+    key = storage.key_for(str(job.id), variant)
     backend = storage.get_storage()
 
     # Built inside the backend's own scratch area when it has one, so storing
@@ -170,7 +174,7 @@ def _publish(result, job: Job, *, output_type: str, stats: dict,
 
     return OutputSpec(
         output_type=output_type,
-        cog_uri=backend.url_for(key) or storage.download_url(str(job.id)),
+        cog_uri=backend.url_for(key) or storage.download_url(str(job.id), variant),
         bounds=_bounds_wgs84(result.grid),
         crs=str(result.grid.crs),
         resolution_m=result.grid.resolution,
@@ -268,10 +272,34 @@ def _run_change(report: Reporter, job: Job) -> list[OutputSpec]:
         logger.warning("job %s: %s", job.id, warning)
 
     report(JobStatus.WRITING_COG)
-    return [_publish(result, job, output_type="change_raster",
-                     stats=_change_stats(result.stats),
-                     valid_fraction=result.stats.valid_fraction,
-                     warnings=list(result.warnings))]
+    outputs = [_publish(result, job, output_type="change_raster",
+                        stats=_change_stats(result.stats),
+                        valid_fraction=result.stats.valid_fraction,
+                        warnings=list(result.warnings))]
+
+    # The two sides of the difference, so the interface can show *what*
+    # changed rather than only how much (PLAN.md 11, before/after swipe). A
+    # difference raster cannot be un-differenced -- +0.3 could be bare ground
+    # becoming scrub or forest becoming denser forest, and only the two dates
+    # distinguish them.
+    #
+    # Published after the change raster, and failures here are not allowed to
+    # lose it: the difference is the result the user asked for, and a job that
+    # threw away a completed analysis because a supplementary render failed
+    # would be trading the answer for a picture.
+    for variant, side in (("earlier", result.earlier), ("later", result.later)):
+        if side is None:
+            continue
+        try:
+            outputs.append(_publish(
+                side, job, output_type=f"{variant}_{result.index}",
+                stats=side.stats(), valid_fraction=side.valid_fraction,
+                warnings=list(side.warnings), variant=variant))
+        except Exception as exc:
+            logger.warning("job %s: %s date raster not published (%s); the change "
+                           "raster is unaffected", job.id, variant, exc)
+
+    return outputs
 
 
 def _fake_estimate(mpixels: float) -> float:

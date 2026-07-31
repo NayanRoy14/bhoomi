@@ -92,6 +92,8 @@ makes an OGC API – Processes async execution model natural rather than bolted 
 | TiTiler — results rendered on the map | **Working** — loopback only, see below |
 | Object storage — Cloudflare R2 | **Implemented**, verified against MinIO; needs a real bucket |
 | Two-date change detection | **Working** — with baseline and seasonality warnings |
+| Before/after swipe | **Working** — a change job publishes both dates as well as the difference |
+| CI — tests, migrations, harmonization gate | **Working** — 5 jobs, integration runs 363 tests with no skips |
 | OGC API – Processes | Not started (February 2027) |
 
 A real NDVI over New Town / Rajarhat, submitted to the deployed stack and finished in 11 s:

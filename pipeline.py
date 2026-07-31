@@ -99,6 +99,14 @@ class ChangeResult:
     baselines: tuple[str | None, str | None]
     stats: change.ChangeStats
     warnings: list[str] = field(default_factory=list)
+    #: The two per-date index rasters the difference was taken between, in
+    #: chronological order. Carried because a difference raster cannot be
+    #: un-differenced: showing a user *what changed* needs both sides, and
+    #: recomputing them would mean reading every band a second time. They are
+    #: already in memory when the difference is formed, so this costs the
+    #: lifetime of two arrays and no extra work.
+    earlier: IndexResult | None = None
+    later: IndexResult | None = None
 
     def write(self, path: str | Path) -> Path:
         return cog.write_cog(
@@ -261,4 +269,5 @@ def compute_change(
                         scene_ids=(earlier.id, later.id),
                         baselines=(earlier.processing_baseline,
                                    later.processing_baseline),
-                        stats=stats, warnings=warnings)
+                        stats=stats, warnings=warnings,
+                        earlier=a, later=b)

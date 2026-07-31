@@ -186,32 +186,50 @@ def job_result(job_id: str, jobs: JobStore = Depends(get_job_store)
         raise errors.job_failed(str(job.id), job.status.value, job.error_message)
 
     outputs = jobs.outputs_for(job.id)
-    # Built here rather than stored on the row: the tile server's address and
-    # the colour ramp are deployment configuration, and baking them into a
-    # 30-day-lived row would mean old outputs pointing at a tile server that
-    # has since moved.
-    source = storage.get_storage().tile_source(storage.key_for(str(job.id)))
+    backend = storage.get_storage()
+
+    def described(o) -> schemas.OutputOut:
+        # Built here rather than stored on the row: the tile server's address
+        # and the colour ramp are deployment configuration, and baking them
+        # into a 30-day-lived row would mean old outputs pointing at a tile
+        # server that has since moved.
+        variant = _variant_of(o.output_type)
+        source = backend.tile_source(storage.key_for(str(job.id), variant))
+        download = f"/api/v1/jobs/{job.id}/download"
+        return schemas.OutputOut(
+            type=o.output_type, cog=o.cog_uri,
+            download=download if variant is None else f"{download}?output={variant}",
+            bounds=list(_bounds_of(o.bounds)), crs=o.crs,
+            resolution_m=o.resolution_m, valid_fraction=o.valid_fraction,
+            stats=o.stats, expires_at=o.expires_at,
+            tiles=tiles.tiles_url(tiles.render_key(job.process, o.output_type), source),
+            warnings=o.warnings,
+        )
 
     return schemas.JobResultResponse(
         job_id=str(job.id),
-        outputs=[
-            schemas.OutputOut(
-                type=o.output_type, cog=o.cog_uri,
-                download=f"/api/v1/jobs/{job.id}/download",
-                bounds=list(_bounds_of(o.bounds)), crs=o.crs,
-                resolution_m=o.resolution_m, valid_fraction=o.valid_fraction,
-                stats=o.stats, expires_at=o.expires_at,
-                tiles=tiles.tiles_url(job.process, source),
-                warnings=o.warnings,
-            )
-            for o in outputs
-        ],
+        outputs=[described(o) for o in outputs],
     )
+
+
+#: Which storage variants a download may name. Closed rather than free-form:
+#: the value reaches `key_for`, and an unbounded one there is a path the caller
+#: chooses.
+_DOWNLOADABLE_VARIANTS = {"earlier", "later"}
+
+
+def _variant_of(output_type: str) -> str | None:
+    """The storage variant an output row was written under, or None if primary."""
+    for prefix in ("earlier_", "later_"):
+        if output_type.startswith(prefix):
+            return prefix.rstrip("_")
+    return None
 
 
 @router.get("/{job_id}/download", summary="Download the output COG",
             response_class=FileResponse)
-def job_download(job_id: str, jobs: JobStore = Depends(get_job_store)):
+def job_download(job_id: str, output: str | None = None,
+                 jobs: JobStore = Depends(get_job_store)):
     """Serve the raster itself (PLAN.md 7.5).
 
     Three routes to the same bytes, cheapest first: redirect to a public URL if
@@ -219,14 +237,23 @@ def job_download(job_id: str, jobs: JobStore = Depends(get_job_store)):
     otherwise stream it out of object storage. A private R2 bucket takes the
     third -- it has no stable public URL by design, because a presigned one
     would expire inside `outputs.cog_uri` (see `Storage.url_for`).
+
+    `?output=earlier|later` selects one of a change job's two per-date rasters.
+    Omitted, it serves the job's primary output, which is what every existing
+    link means.
     """
     job = _load(job_id, jobs)
     if job.status is not JobStatus.COMPLETED:
         raise errors.result_not_ready(str(job.id), job.status.value, job.progress)
 
-    key = storage.key_for(str(job.id))
+    if output is not None and output not in _DOWNLOADABLE_VARIANTS:
+        raise errors.unknown_output(str(job.id), output,
+                                    sorted(_DOWNLOADABLE_VARIANTS))
+
+    key = storage.key_for(str(job.id), output)
     backend = storage.get_storage()
-    filename = f"bhoomi_{job.process}_{job.id}.tif"
+    suffix = f"_{output}" if output else ""
+    filename = f"bhoomi_{job.process}{suffix}_{job.id}.tif"
 
     direct = backend.url_for(key)
     if direct:

@@ -83,7 +83,19 @@ interface Props {
   /** The primary search window, used to seed the comparison window. */
   searchStart: string;
   searchEnd: string;
-  onOutput: (output: Output | null) => void;
+  /**
+   * Every output the job produced, primary first.
+   *
+   * The list rather than the first element: a change job publishes three
+   * rasters -- the difference and the two dates it was taken between -- and
+   * the page needs the other two to offer the swipe.
+   *
+   * `dates` carries the two acquisition dates in chronological order, because
+   * the output rows describe rasters and do not know when they were taken.
+   * Labelling a swipe "Earlier" and "Later" when the real answer is
+   * "Mar 2020" and "Mar 2026" throws away the thing the comparison is about.
+   */
+  onOutput: (outputs: Output[], dates?: [string, string] | null) => void;
   opacity: number;
   onOpacity: (value: number) => void;
 }
@@ -252,7 +264,7 @@ export default function AnalysisPanel({
     setOutput(null);
     setEstimate(null);
     setError(null);
-    onOutput(null);
+    onOutput([], null);
   }
 
   async function collect(id: string) {
@@ -260,7 +272,14 @@ export default function AnalysisPanel({
       const result = await api.getJobResult(id);
       const first = result.outputs[0] ?? null;
       setOutput(first);
-      onOutput(first);
+      // Chronological, matching the order the outputs are published in.
+      const pair: [string, string] | null =
+        needsTwo && compare && scene
+          ? new Date(compare.acquired_at) <= new Date(scene.acquired_at)
+            ? [formatDate(compare.acquired_at), formatDate(scene.acquired_at)]
+            : [formatDate(scene.acquired_at), formatDate(compare.acquired_at)]
+          : null;
+      onOutput(result.outputs, pair);
       if (!first) {
         setError(
           "The job completed but produced no raster. That is expected for the " +

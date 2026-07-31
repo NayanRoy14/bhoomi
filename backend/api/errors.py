@@ -135,6 +135,20 @@ def job_failed(job_id: str, status: str, message: str | None) -> BhoomiError:
         status=status)
 
 
+def unknown_output(job_id: str, requested: str, available: list[str]) -> BhoomiError:
+    """400: the caller named an output this endpoint does not serve.
+
+    Names the valid ones rather than only refusing, because the alternative is
+    a caller guessing at a query parameter. The set is closed deliberately --
+    the value reaches the storage key, so an unbounded one would let the caller
+    choose a path.
+    """
+    return BhoomiError(
+        400, "unknown_output",
+        f"Job {job_id} has no output named {requested!r}. "
+        f"Available: {', '.join(available)}, or omit ?output for the main result.")
+
+
 def output_missing(job_id: str) -> BhoomiError:
     """410, not 404: it existed. Retrying will not bring it back.
 

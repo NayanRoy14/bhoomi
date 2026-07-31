@@ -69,6 +69,27 @@ def render_for(process: str) -> tuple[str, tuple[float, float]]:
     return RENDER.get(process, DEFAULT_RENDER)
 
 
+def render_key(process: str, output_type: str | None = None) -> str:
+    """Which ramp an output wants, which is not always the job's process.
+
+    A change job publishes three rasters: the difference, and the two per-date
+    index rasters it was taken between. Rendering an NDVI raster with the
+    change ramp would put a healthy field in the brown "vegetation lost" half
+    of the scale -- the picture would be wrong in the one way a colour ramp
+    can be, by inverting the reading.
+
+    Per-date outputs are named `earlier_<index>` / `later_<index>`, so the
+    index they carry is in the name and needs no extra column.
+    """
+    if output_type:
+        for prefix in ("earlier_", "later_"):
+            if output_type.startswith(prefix):
+                return output_type[len(prefix):]
+        if output_type == "change_raster":
+            return "change"
+    return process
+
+
 def tiles_url(process: str, source: str | None) -> str | None:
     """An XYZ template for this output, or None if tiles are unavailable.
 

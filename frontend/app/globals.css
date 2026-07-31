@@ -568,3 +568,106 @@ a.primary.block:hover {
 .result-warnings p + p {
   margin-top: 8px;
 }
+
+/* ---------------------------------------------------------------- swipe */
+
+/* The earlier date sits on top of the later one and is clipped to the left of
+   the handle. Both maps fill the wrapper, so the clip is the only thing that
+   decides what is visible -- no layout shifts as the handle moves. */
+.swipe-left {
+  z-index: 1;
+  /* Clipped, so it must not eat the pointer events the driver map needs. */
+  pointer-events: none;
+}
+
+.swipe-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  z-index: 2;
+  width: 2px;
+  margin-left: -1px;
+  background: rgba(255, 255, 255, 0.9);
+  box-shadow: 0 0 0 1px rgba(15, 20, 25, 0.35);
+  cursor: ew-resize;
+  touch-action: none;
+}
+
+.swipe-handle:focus-visible {
+  outline: 2px solid var(--accent, #2563eb);
+  outline-offset: 2px;
+}
+
+/* The grip is what the pointer actually has to hit. Wider than the visible
+   line, because a 2 px drag target is a 2 px drag target. */
+.swipe-grip {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.95);
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.4);
+}
+
+.swipe-grip::before,
+.swipe-grip::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  width: 0;
+  height: 0;
+  border: 5px solid transparent;
+  transform: translateY(-50%);
+}
+
+.swipe-grip::before {
+  left: 5px;
+  border-right-color: #0f1419;
+}
+
+.swipe-grip::after {
+  right: 5px;
+  border-left-color: #0f1419;
+}
+
+.swipe-label {
+  position: absolute;
+  top: 14px;
+  z-index: 2;
+  padding: 4px 10px;
+  font-size: 12px;
+  border-radius: 6px;
+  background: rgba(15, 20, 25, 0.92);
+  border: 1px solid var(--border);
+  pointer-events: none;
+  transition: opacity 120ms linear;
+}
+
+.swipe-label.left {
+  left: 14px;
+}
+
+.swipe-label.right {
+  right: 14px;
+}
+
+/* The map area, which holds either the map or the swipe. Positioned so the
+   toggle can sit over whichever is showing. */
+.stage {
+  position: relative;
+  height: 100%;
+  min-height: 0;
+}
+
+.stage-toggle {
+  position: absolute;
+  top: 14px;
+  left: 14px;
+  z-index: 3;
+  background: rgba(15, 20, 25, 0.92);
+  font-size: 12.5px;
+  padding: 7px 12px;
+}

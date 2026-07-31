@@ -327,11 +327,22 @@ def set_storage(storage: Storage | None) -> None:
         _storage = storage
 
 
-def key_for(job_id: str) -> str:
-    """One output per job in V1, so the job id is the whole key."""
-    return f"{job_id}.tif"
+def key_for(job_id: str, variant: str | None = None) -> str:
+    """The storage key for one of a job's outputs.
+
+    The job id alone is the key for a job's primary output, unchanged from when
+    that was the only possibility -- so keys already written, and the
+    `cog_uri`s recorded against them for 30 days, keep resolving.
+
+    A change job also publishes the two per-date rasters its difference was
+    taken between (PLAN.md 11, before/after swipe), and those need keys of
+    their own. `.` rather than `/` as the separator keeps every object for a
+    job on one prefix, which is what makes expiry a prefix listing.
+    """
+    return f"{job_id}.tif" if variant is None else f"{job_id}.{variant}.tif"
 
 
-def download_url(job_id: str) -> str:
+def download_url(job_id: str, variant: str | None = None) -> str:
     """The 7.5 download route, absolute so it is usable off-host."""
-    return f"{PUBLIC_BASE_URL.rstrip('/')}/api/v1/jobs/{job_id}/download"
+    base = f"{PUBLIC_BASE_URL.rstrip('/')}/api/v1/jobs/{job_id}/download"
+    return base if variant is None else f"{base}?output={variant}"
