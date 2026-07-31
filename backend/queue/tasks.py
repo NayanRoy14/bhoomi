@@ -19,6 +19,7 @@ from rq.timeouts import JobTimeoutException
 
 from backend.db.jobs import IllegalTransition, JobStatus, JobStore
 from backend.queue import processes
+from backend.queue.processes import InvalidOutput
 from backend.storage import OutputTooLarge
 from catalogue import CatalogueError
 from pipeline import PipelineError
@@ -65,8 +66,10 @@ def run_job(job_id: str) -> str:
         logger.warning("job %s rejected before processing: %s", job_id, exc)
         _fail(store, job_id, str(exc), None)
         return JobStatus.FAILED.value
-    except OutputTooLarge as exc:
-        logger.warning("job %s produced too large an output: %s", job_id, exc)
+    except (OutputTooLarge, InvalidOutput) as exc:
+        # The raster was computed but is not publishable -- over the size cap
+        # (PLAN.md 8) or not a valid COG. Both messages already say which.
+        logger.warning("job %s produced an unpublishable output: %s", job_id, exc)
         _fail(store, job_id, str(exc), None)
         return JobStatus.FAILED.value
     except JobTimeoutException:

@@ -147,11 +147,14 @@ class TestNdviProcess:
             assert np.nanmean(src.read(1)) == pytest.approx(EXPECTED_NDVI, abs=1e-4)
 
     def test_the_output_is_a_valid_cog(self, wired, job):
-        """PLAN.md: COG validity is checked before a job is marked complete."""
+        """validate_cog returns (ok, messages) -- assert on the flag, not the
+        tuple. A 2-tuple is always truthy, so `assert validate_cog(p)` can
+        never fail and this test proved nothing until 2026-07-31."""
         from processing import cog
         processes.get("ndvi").run(Recorder(), job)
         path = storage.get_storage().local_path(storage.key_for(str(job.id)))
-        assert cog.validate_cog(path)
+        ok, messages = cog.validate_cog(path)
+        assert ok, messages
 
     def test_the_cog_carries_its_provenance(self, wired, job):
         processes.get("ndvi").run(Recorder(), job)

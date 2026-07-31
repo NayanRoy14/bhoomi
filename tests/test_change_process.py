@@ -140,7 +140,8 @@ class TestChange:
         wire(monkeypatch, earlier_scene(scene, tmp_path), scene)
         run(change_job)
         path = storage.get_storage().local_path(storage.key_for(str(change_job.id)))
-        assert cog.validate_cog(path)
+        ok, messages = cog.validate_cog(path)
+        assert ok, messages
 
     def test_the_cog_names_both_source_scenes(self, store, scene, change_job,
                                               tmp_path, monkeypatch):

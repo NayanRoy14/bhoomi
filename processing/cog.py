@@ -88,7 +88,13 @@ def validate_cog(path: str | Path) -> tuple[bool, list[str]]:
     with rasterio.open(path) as src:
         if not src.profile.get("tiled", False):
             messages.append("not tiled")
-        if not src.overviews(1):
+        # Overviews are only required once the image exceeds a single block.
+        # Below that the block IS the whole image, so there is nothing to
+        # decimate and GDAL writes none -- correctly. Demanding them anyway
+        # failed every small output: NDBI at 20 m over the demo AOI is
+        # 260x225 against a 512 block, and rio-cogeo passes it.
+        block = min(src.block_shapes[0]) if src.block_shapes else 512
+        if max(src.width, src.height) > block and not src.overviews(1):
             messages.append("no overviews")
         if src.nodata is None:
             messages.append("nodata not set")

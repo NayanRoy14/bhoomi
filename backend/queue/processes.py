@@ -36,6 +36,7 @@ from typing import Callable, Protocol
 
 import pipeline
 from backend import storage
+from processing import cog
 from backend.db.jobs import Job, JobStatus
 from backend.resolve import resolve_scene
 
@@ -68,6 +69,14 @@ OFFSET_DETECTION_SECONDS = 11.0
 #: PLAN.md 6: anonymous job outputs expire after 30 days. Demo outputs are
 #: pinned by setting this to None on the row afterwards.
 RETENTION = timedelta(days=30)
+
+
+class InvalidOutput(RuntimeError):
+    """A finished raster failed COG validation and was not published.
+
+    Raised rather than warned: an invalid COG reaches the user looking fine and
+    degrades the tile server silently, which is worse than a failed job.
+    """
 
 
 class Reporter(Protocol):
@@ -147,6 +156,16 @@ def _publish(result, job: Job, *, output_type: str, stats: dict,
     with tempfile.TemporaryDirectory(prefix="bhoomi-", dir=backend.scratch_dir()) as scratch:
         path = Path(scratch) / key
         result.write(path)
+
+        # Checked before publishing, which is what the README claims and what
+        # cog.validate_cog's own docstring asks for -- and was not happening.
+        # An invalid COG still opens in QGIS but makes a tile server read
+        # badly, so the failure surfaces later as "tiles are slow", which is
+        # very hard to trace back here.
+        valid, messages = cog.validate_cog(path)
+        if not valid:
+            raise InvalidOutput(f"Output failed COG validation: {'; '.join(messages)}")
+
         size = backend.put(path, key)
 
     return OutputSpec(
