@@ -7,13 +7,12 @@ returns a standards-compliant raster product that another GIS tool can consume.
 
 > ⚠️ **Early development.** Search and server-side processing work end to end — draw an area,
 > pick a scene, run an index or difference two dates, see it on the map, download the
-> Cloud-Optimized GeoTIFF. See [Status](#status). Development runs August 2026 – March 2027.
+> Cloud-Optimized GeoTIFF. **Not yet deployed publicly.** See [Status](#status).
+> Development runs August 2026 – March 2027.
 >
-> **Deployed on a free tier**, which is visible in how it behaves: the API sleeps after 15
-> minutes so the first request takes about 40 seconds, downloads do not survive a restart
-> because the disk is ephemeral, and there is no tile server, so the map preview is absent
-> rather than broken. [`docs/deploy-render.md`](docs/deploy-render.md) explains each of those and
-> what fixes it; [`docs/deploy.md`](docs/deploy.md) is the deployment without the compromises.
+> Two deployment paths are written and ready but neither has been run:
+> [`docs/deploy.md`](docs/deploy.md) (a VM, full stack, tiles included) and
+> [`docs/deploy-render.md`](docs/deploy-render.md) (a free tier, with the compromises named).
 
 ![NDVI change over New Town / Rajarhat, Kolkata, 2020 to 2026](docs/images/kolkata_change.png)
 
@@ -143,7 +142,6 @@ three wrong answers to reach — see [below](#a-note-on-the-hard-part).
 | Before/after swipe | **Working** — a change job publishes both dates as well as the difference |
 | CI — tests, migrations, harmonization gate | **Working** — 5 jobs, integration runs all 414 tests with no skips |
 | OGC API – Processes Part 1: Core | **Working** — `examples/ogc_client.py` executes and downloads by following links from the landing page |
-| Public deployment | **Live on Render's free tier** — verified by `examples/ogc_client.py` running against it end to end and writing a GeoTIFF. See the note at the top for what the free tier costs. |
 
 A real NDVI over New Town / Rajarhat, submitted to the deployed stack and finished in 11 s:
 
