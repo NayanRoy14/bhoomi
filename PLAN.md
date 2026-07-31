@@ -577,6 +577,42 @@ let that make the code lazy — a user drawing an AOI over a `_0_` scene still n
 and assert the resulting NDVIs match within 1e-6. Add a third case with both properties absent
 and assert it raises rather than silently defaulting.
 
+## 5.3.1b Independently verified for one scene, 2026-07-31
+
+`S2C_45QXF_20260227_0_L2A` — the scene the §5.3.1 fix actually changed, which measured 0.976 %
+at the old decimation and was misclassified — checked four ways, none of which runs Bhoomi's
+detector:
+
+1. **Physics.** Lowest valid DN across NIR and red is **319**. An offset-bearing product cannot
+   have valid pixels below ~800, because reflectance cannot be below about −0.02. The offset is
+   absent, which is what the detector concluded.
+2. **Independent recomputation.** NDVI computed from the raw bands with bare numpy and rasterio,
+   importing nothing from `processing/` or `pipeline`, onto the grid Bhoomi's own output declares:
+   **100.0000 % of 233,027 pixels agree to 1e-4**, maximum absolute difference 1.13e-07, which is
+   float32 resolution.
+3. **The other branch is visibly broken.** Assuming the offset present gives a median of **+0.961**
+   with **48.0 %** of pixels outside [−1, 1]. There is no ambiguity between the two answers.
+4. **Land cover behaves.** Classes picked from *raw band* thresholds, never from NDVI, so the test
+   is not circular:
+
+| class (from raw bands) | pixels | NDVI median | p10 | p90 |
+|---|---|---|---|---|
+| water — NIR-absorbing | 7,313 | **−0.086** | −0.184 | +0.014 |
+| vegetation — NIR-bright, red-absorbing | 23,727 | **+0.587** | +0.515 | +0.682 |
+| built-up — SWIR-bright | 33,167 | **+0.209** | +0.117 | +0.337 |
+
+SCL, a classifier shipped with the product and not used to compute anything here, agrees: its
+water class sits at −0.155, vegetation at +0.592, not-vegetated at +0.315.
+
+A harmonization error shifts every value by roughly +0.24 or more. Water at −0.086 could not
+survive that, and neither could the [−1, 1] bound. **The decision is correct for this scene.**
+
+**What this does not establish.** One scene. The calibration still rests on ten scenes over one
+tile with ~0.49 pp of margin (§5.3.2), and nothing here speaks to a different tile, a different
+season, or a genuinely offset-bearing product — of which only one has ever been measured.
+
+---
+
 ## 5.3.2 Open risk — detection cost can exceed the job timeout
 
 **Measured 2026-07-31, and not yet resolved.** §5.3.1 set `DEFAULT_DECIMATION = 4` and recorded

@@ -168,9 +168,16 @@ was calibrated at one sampling density and applied at another, misclassifying fo
 scenes tested. See `PLAN.md` §5.3.1. **This is the part of Bhoomi most likely to still be
 wrong.**
 
-The current calibration rests on **ten scenes over one tile**, and the tenth sat below the range
-the other nine established — correctly classified, but on about half the margin. A wider sample,
-over more tiles and more of the world, would be the honest next step.
+The decision has been **independently verified for one scene** — the one the fix changed. NDVI
+recomputed from raw bands without any Bhoomi code agrees with Bhoomi's output on 100 % of 233,027
+pixels; the alternative branch puts 48 % of pixels outside the mathematically possible range; and
+water, vegetation and built-up — classified from raw bands, not from NDVI — land at −0.09, +0.59
+and +0.21 respectively, which a harmonization error could not produce. See `PLAN.md` §5.3.1b.
+
+That is one scene. The calibration still rests on **ten scenes over one tile**, and the tenth sat
+below the range the other nine established — correctly classified, but on about half the margin.
+Only one genuinely offset-bearing product has ever been measured. A wider sample, over more tiles
+and more of the world, would be the honest next step.
 
 Detection is also expensive and highly variable: about 11 seconds warm, but **492 seconds** has
 been observed on a cold container. It is paid once per scene and then cached, but a first job on
