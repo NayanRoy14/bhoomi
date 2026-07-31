@@ -120,6 +120,21 @@ class Storage(Protocol):
     def delete(self, key: str) -> None:
         ...
 
+    def delete_prefix(self, prefix: str) -> int:
+        """Delete every object whose key starts with `prefix`. Returns the count.
+
+        Retention (PLAN.md 6) expires a *job*, not a key, and a change job
+        publishes three objects — the difference and the two dates it was taken
+        between. `key_for` puts all of them on the `{job_id}.` prefix precisely
+        so this can be one call rather than a guess at which variants exist.
+
+        Deriving the variants from the `outputs` rows instead would be wrong in
+        the one case that matters: `_publish` is allowed to fail for a
+        supplementary date raster *after* it has been stored, leaving an object
+        with no row. Those are exactly the objects nothing else will ever
+        reclaim, so expiry has to work from the store's own listing.
+        """
+
 
 class LocalStorage(Storage):
     """A directory on disk. Development, and single-box deployments."""
@@ -193,12 +208,35 @@ class LocalStorage(Storage):
     def delete(self, key: str) -> None:
         self._path(key).unlink(missing_ok=True)
 
+    def delete_prefix(self, prefix: str) -> int:
+        """Non-recursive by construction: `_path` forbids separators in keys,
+        so every object is a direct child of the root and a glob cannot escape
+        it. `.scratch` is a directory and is skipped by `is_file`."""
+        self._reject_traversal(prefix)
+        removed = 0
+        with self._lock:
+            for path in self.root.glob(f"{prefix}*"):
+                if not path.is_file():
+                    continue
+                path.unlink(missing_ok=True)
+                removed += 1
+        return removed
+
     def _path(self, key: str) -> Path:
+        self._reject_traversal(key)
+        return self.root / key
+
+    @staticmethod
+    def _reject_traversal(key: str) -> None:
         # Keys are generated from job UUIDs, never from user input, but a
         # traversal here would read arbitrary files -- cheap to rule out.
-        if "/" in key or "\\" in key or key.startswith("."):
+        #
+        # The empty string is rejected for `delete_prefix`'s sake rather than
+        # `_path`'s: an empty prefix globs to every object in the root, so a
+        # caller that lost its job id would silently empty the store instead of
+        # raising. Nothing legitimately asks for a nameless key either way.
+        if not key or "/" in key or "\\" in key or key.startswith("."):
             raise ValueError(f"Unsafe storage key {key!r}")
-        return self.root / key
 
 
 class S3Storage(Storage):
@@ -322,6 +360,33 @@ class S3Storage(Storage):
 
     def delete(self, key: str) -> None:
         self.client.delete_object(Bucket=self.bucket, Key=key)
+
+    def delete_prefix(self, prefix: str) -> int:
+        """Paginated list-then-delete.
+
+        `delete_objects` takes 1000 keys per call and the paginator already
+        yields at most that, so one batch per page needs no further chunking.
+        A job has three objects at most; the pagination is for the case where a
+        prefix somehow accumulated more, not for the expected one.
+
+        R2 implements both `list_objects_v2` and the batch `delete_objects`,
+        which is why this stays inside the S3 API rather than reaching for a
+        Cloudflare-specific lifecycle rule. A bucket lifecycle policy would
+        also expire objects, but it would do it *silently and separately from
+        the rows*, so the database and the bucket could disagree with nothing
+        logging that they had.
+        """
+        if not prefix:
+            raise ValueError("delete_prefix needs a prefix; '' is the whole bucket")
+        removed = 0
+        paginator = self.client.get_paginator("list_objects_v2")
+        for page in paginator.paginate(Bucket=self.bucket, Prefix=prefix):
+            keys = [{"Key": item["Key"]} for item in page.get("Contents", [])]
+            if not keys:
+                continue
+            self.client.delete_objects(Bucket=self.bucket, Delete={"Objects": keys})
+            removed += len(keys)
+        return removed
 
 
 _storage: Storage | None = None

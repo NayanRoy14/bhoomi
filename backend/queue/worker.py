@@ -14,6 +14,7 @@ import sys
 
 from rq import SimpleWorker, Worker
 
+from backend.queue import maintenance
 from backend.queue.connection import QUEUE_NAME, get_queue
 
 logger = logging.getLogger(__name__)
@@ -82,6 +83,18 @@ def main() -> int:
         # loop that shows up in `docker compose ps`.
         logger.error("BHOOMI_REDIS_URL is not set; a worker has nothing to listen to")
         return 1
+
+    # Retention, the stalled-job reaper and the IP purge (PLAN.md 6).
+    #
+    # Started here rather than earlier so it belongs to a process that is about
+    # to block in `work()`: the queue check above exits, and a maintenance
+    # thread in a process on its way out would sweep once and vanish, which
+    # looks in the logs exactly like a sweep that ran.
+    #
+    # In the worker rather than the API because the worker is the singleton --
+    # the API scales to several replicas everywhere except Render's free tier,
+    # and N replicas would mean N delete loops over the same rows.
+    maintenance.start()
 
     cls = worker_class()
     logger.info("worker listening on %r (%s)", QUEUE_NAME, cls.__name__)
