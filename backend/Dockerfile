@@ -36,7 +36,10 @@ COPY catalogue/ ./catalogue/
 # the other leaves an image whose `import pipeline` fails at runtime.
 COPY pipeline.py cache.py alembic.ini ./
 COPY backend/ ./backend/
-RUN chmod +x backend/entrypoint.sh
+# render-start.sh as well as entrypoint.sh: git on Windows does not carry the
+# executable bit, so a script that is only ever invoked by path would fail with
+# "permission denied" in the image.
+RUN chmod +x backend/entrypoint.sh backend/render-start.sh
 
 # The output directory must exist in the IMAGE, owned by the runtime user.
 # Docker seeds a fresh named volume from whatever the image has at that path,

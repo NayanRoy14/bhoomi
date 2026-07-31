@@ -1,0 +1,109 @@
+# Render blueprint: Bhoomi on the free tier.
+#
+#   Render dashboard -> New -> Blueprint -> pick this repo.
+#
+# Two services and one Key Value instance, all free. Postgres is deliberately
+# NOT here: Render's free Postgres expires 30 days after creation and takes the
+# deployment with it, so docs/deploy-render.md uses Neon instead, which is free
+# without an expiry and supports PostGIS. BHOOMI_DATABASE_URL is therefore
+# `sync: false` -- Render prompts for it rather than provisioning it.
+#
+# Read docs/deploy-render.md before deploying. The free tier imposes three
+# behaviours that are surprising if you meet them without warning: the API
+# sleeps after 15 minutes, its disk is ephemeral, and the worker shares a
+# container with the API because Render has no free background worker.
+
+services:
+  # ---------------------------------------------------------------- API
+  - name: bhoomi-api
+    type: web
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: .
+    # Overrides the image's CMD. The ENTRYPOINT still runs, so migrations are
+    # applied before this starts.
+    dockerCommand: backend/render-start.sh
+    # Oregon is Render's US-west region, and the Sentinel-2 COGs are in AWS
+    # us-west-2. This is the single highest-leverage line in the file: the same
+    # band read measured 5-175 s from India and about 8 s from a us-west host.
+    # Do not move this closer to the audience -- the user waits on the job, and
+    # the job waits on S3.
+    region: oregon
+    plan: free
+    healthCheckPath: /health
+    envVars:
+      # ---- provided by you at deploy time -----------------------------
+      # Neon's pooled connection string. See docs/deploy-render.md step 1.
+      - key: BHOOMI_DATABASE_URL
+        sync: false
+      # The static site's URL, e.g. https://bhoomi.onrender.com. Needed because
+      # the browser calls the API cross-origin here -- unlike the Docker Compose
+      # deployment, where Caddy puts both behind one host.
+      - key: BHOOMI_CORS_ORIGINS
+        sync: false
+      # This service's own URL, e.g. https://bhoomi-api.onrender.com. It goes
+      # into outputs.cog_uri, so it must be what a client can reach.
+      - key: BHOOMI_PUBLIC_BASE_URL
+        sync: false
+
+      # ---- wired automatically ----------------------------------------
+      - key: BHOOMI_REDIS_URL
+        fromService:
+          name: bhoomi-queue
+          type: keyvalue
+          property: connectionString
+
+      # ---- fixed ------------------------------------------------------
+      # Empty disables tiles: the API returns `tiles: null` and the UI says
+      # there is no map preview rather than offering a link that 404s. There is
+      # no free tile server here, and exposing one over an ephemeral local disk
+      # would be an arbitrary-file-read -- see the warning in README.md.
+      # Set this, plus the S3 variables, once an R2 bucket exists.
+      - key: BHOOMI_TITILER_URL
+        value: ""
+      # Render terminates TLS and forwards exactly one X-Forwarded-For hop.
+      # Without this every request looks like it came from Render's proxy and
+      # the whole internet shares one rate-limit budget.
+      - key: BHOOMI_TRUSTED_PROXY_HOPS
+        value: "1"
+      # Tighter than the defaults: this is 0.1 CPU shared with the API.
+      - key: BHOOMI_JOB_LIMIT
+        value: "5"
+      - key: BHOOMI_SEARCH_LIMIT
+        value: "60"
+      # A job on 0.1 CPU is slower than the 600 s default assumes.
+      - key: BHOOMI_JOB_TIMEOUT
+        value: "900"
+      - key: BHOOMI_LOG_LEVEL
+        value: INFO
+
+  # ---------------------------------------------------------- frontend
+  - name: bhoomi
+    type: web
+    runtime: static
+    rootDir: ./frontend
+    # BHOOMI_STATIC_EXPORT switches next.config.mjs to `output: "export"`.
+    # A static site is free, unlimited and never sleeps, so the UI stays up
+    # even while the API is spun down -- which turns a dead-looking demo into
+    # one that shows a slow first request.
+    buildCommand: npm ci && BHOOMI_STATIC_EXPORT=1 npm run build
+    staticPublishPath: ./out
+    envVars:
+      # Inlined into the bundle at build time, so changing it needs a rebuild,
+      # not a restart. Set it to the API service's URL.
+      - key: NEXT_PUBLIC_API_URL
+        sync: false
+
+# ------------------------------------------------------------- queue
+  - name: bhoomi-queue
+    type: keyvalue
+    plan: free
+    region: oregon
+    # Internal only. An empty allow list means no public network access, which
+    # is what you want -- only bhoomi-api needs to reach it.
+    ipAllowList: []
+    # Free Key Value does not persist to disk, and that is acceptable here by
+    # design: PLAN.md 6 makes the jobs table the source of truth and the queue
+    # a work list. Losing it costs in-flight jobs, which the state machine
+    # already handles, rather than history.
+    maxmemoryPolicy: noeviction
