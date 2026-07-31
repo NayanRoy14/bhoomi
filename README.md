@@ -42,6 +42,10 @@ four different answers, and **no viewer would have caught any of the errors**:
 Each step cut the headline by roughly 4×, and each cut came from a control the previous step
 lacked. The last number is small, and it is the only one that survives scrutiny.
 
+[`docs/limitations.md`](docs/limitations.md) carries the whole chain, what each control caught,
+and where every number came from — including which have been independently re-run and which have
+not.
+
 ## Architecture
 
 ```
@@ -211,7 +215,7 @@ processing/   pure raster library -- no web dependencies, importable from a note
 examples/     worked analyses over Kolkata
 probes/       measurement scripts -- every empirical claim in PLAN.md is re-runnable
 tests/        345 tests; 74 need Postgres, Redis or S3, the rest need nothing
-docs/         data-source notes and the Bhoonidhi access request
+docs/         limitations.md -- what Bhoomi cannot tell you; Bhoonidhi access request
 PLAN.md       the full project plan, with a live decisions register
 ```
 
