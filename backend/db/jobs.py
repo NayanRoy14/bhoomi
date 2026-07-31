@@ -511,6 +511,81 @@ class JobStore:
             for r in rows
         ]
 
+    # ----------------------------------------------------------- retention
+
+    def expired_jobs(self, limit: int = 500) -> list[str]:
+        """Job ids whose every output is past its `expires_at` (PLAN.md 6).
+
+        **All, not any.** `expires_at IS NULL` marks a pinned output -- the
+        precomputed Kolkata demo rasters (PLAN.md 6, 11.4) are pinned so the
+        thing the README links to does not evaporate 30 days after it was
+        built. Since expiry deletes a whole `{job_id}.` prefix from the object
+        store, one pinned output has to protect the entire job; a per-row rule
+        would delete a pinned demo raster as a bystander of its expired sibling.
+
+        A job with no outputs at all is never returned. It has nothing to
+        reclaim, and the row itself is kept regardless -- see `expire_outputs`.
+        """
+        with self.engine.connect() as conn:
+            rows = conn.execute(text("""
+                SELECT job_id FROM outputs
+                 GROUP BY job_id
+                HAVING count(*) FILTER (
+                           WHERE expires_at IS NULL OR expires_at > now()) = 0
+                 ORDER BY max(expires_at)
+                 LIMIT :limit
+            """), {"limit": limit}).scalars().all()
+        return [str(r) for r in rows]
+
+    def expire_outputs(self, job_ids: list[str]) -> int:
+        """Delete the output rows of these jobs. Returns rows removed.
+
+        **The `jobs` row survives.** PLAN.md 6 says the nightly task deletes
+        expired keys "and their rows", and the rows it means are these: the job
+        itself is the public record that the analysis happened, and `/download`
+        already answers a completed job with no reachable object with 410
+        `output_missing`, whose text names the 30-day retention. Deleting the
+        job too would turn that honest 410 into a 404 that says the job never
+        existed.
+
+        What it does cost, stated because it is not obvious: `stats` goes with
+        the row, so the numeric summary of an expired analysis is gone even
+        though it is a few hundred bytes and the expensive part was the raster.
+        Worth revisiting if the job history ever becomes something people read.
+        """
+        if not job_ids:
+            return 0
+        with self.engine.begin() as conn:
+            result = conn.execute(
+                text("DELETE FROM outputs WHERE job_id = ANY(CAST(:ids AS UUID[]))"),
+                {"ids": list(job_ids)})
+        return result.rowcount
+
+    def purge_client_ips(self, older_than_days: int = 30) -> int:
+        """Forget the IPs of jobs older than the retention window.
+
+        PLAN.md 6 and the privacy note in 14 both promise this in as many
+        words -- "stored only for rate limiting, purged at 30 days" -- and that
+        promise is published in a public repository. It is the one part of
+        retention that is a commitment to a third party rather than a housekeeping
+        preference, so it runs on its own clock: a job's IP is purged at 30 days
+        whether or not the job still has outputs, and whether or not anything
+        was pinned.
+
+        Rate limiting is unaffected. It counts jobs from the last few minutes
+        (PLAN.md 8); nothing consults an IP this old.
+        """
+        with self.engine.begin() as conn:
+            result = conn.execute(text("""
+                UPDATE jobs SET client_ip = NULL
+                 WHERE client_ip IS NOT NULL
+                   AND created_at < now() - make_interval(days => :days)
+            """), {"days": older_than_days})
+        if result.rowcount:
+            logger.info("purged client_ip from %d job(s) older than %d days",
+                        result.rowcount, older_than_days)
+        return result.rowcount
+
     def clear(self) -> None:
         """Forget every job. Tests only -- outputs cascade."""
         with self.engine.begin() as conn:
