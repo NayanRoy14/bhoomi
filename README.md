@@ -65,8 +65,10 @@ makes an OGC API – Processes async execution model natural rather than bolted 
 
 - **STAC** — catalogue search (Element84 Earth Search, `sentinel-2-l2a`)
 - **Cloud-Optimized GeoTIFF** — all outputs, validated before a job is marked complete
-- **OGC API – Processes** — planned; the acceptance test is executing a process from a Python
-  script with no browser involved
+- **OGC API – Processes Part 1: Core** — implemented at `/ogc`, async execution. The acceptance
+  test is `examples/ogc_client.py`: standard library only, no Bhoomi-specific URLs beyond the
+  base, it discovers the processes, reads the input schema, executes, polls and downloads the
+  GeoTIFF with no browser involved
 
 ## What data?
 
@@ -94,7 +96,7 @@ makes an OGC API – Processes async execution model natural rather than bolted 
 | Two-date change detection | **Working** — with baseline and seasonality warnings |
 | Before/after swipe | **Working** — a change job publishes both dates as well as the difference |
 | CI — tests, migrations, harmonization gate | **Working** — 5 jobs, integration runs 363 tests with no skips |
-| OGC API – Processes | Not started (February 2027) |
+| OGC API – Processes Part 1: Core | **Working** — `examples/ogc_client.py` executes and downloads with no Bhoomi-specific code |
 
 A real NDVI over New Town / Rajarhat, submitted to the deployed stack and finished in 11 s:
 
@@ -123,7 +125,7 @@ Outputs go to local disk by default and to object storage when `BHOOMI_S3_BUCKET
 `cog_uri` is a URL either way. On local disk the worker and the API must share a filesystem;
 object storage removes that constraint.
 
-350 tests. 78 of them need Postgres, Redis or an S3-compatible store, and skip without:
+412 tests. 105 of them need Postgres, Redis or an S3-compatible store, and skip without:
 
 ```bash
 docker run -d --rm --name bhoomi-test-pg -p 55432:5432 \

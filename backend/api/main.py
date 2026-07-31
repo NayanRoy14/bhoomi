@@ -16,7 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from backend.api.errors import catalogue_error_handler
 from backend.api.ratelimit import rate_limit_middleware
-from backend.api.routes import health, jobs, scenes
+from backend.api.routes import health, jobs, ogc, scenes
 from catalogue import CatalogueError
 from processing import __version__
 
@@ -34,9 +34,13 @@ on demand and returns Cloud-Optimized GeoTIFFs that any GIS tool can consume.
 **Currently implemented:** catalogue search, and asynchronous processing jobs
 producing NDVI, NDWI and NDBI as Cloud-Optimized GeoTIFFs.
 
-Outputs are written to local disk and served from `/api/v1/jobs/{id}/download`
-until the object-storage decision lands; `cog_uri` is a URL either way. Tile
-serving (TiTiler) and two-date change detection are still to come.
+The same queue is reachable two ways: `/api/v1/*`, which is what the web
+interface uses, and **OGC API - Processes Part 1: Core** under `/ogc`, which is
+what a standards-aware client uses. The OGC routes are a facade over the same
+submission path, not a second implementation -- see `backend/api/submit.py`.
+
+Execution is asynchronous in both. Start at `/ogc` or `/conformance` for the
+standards entry points.
 """
 
 app = FastAPI(
@@ -64,3 +68,4 @@ app.add_exception_handler(CatalogueError, catalogue_error_handler)
 app.include_router(health.router)
 app.include_router(scenes.router)
 app.include_router(jobs.router)
+app.include_router(ogc.router)

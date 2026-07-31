@@ -763,3 +763,91 @@ class TestQueueDelivery:
         redis_conn.sadd("rq:workers", "rq:worker:aaaa")
         redis_conn.sadd("rq:workers:bhoomi", "rq:worker:aaaa")
         assert _live_workers(redis_conn) == 0
+
+
+@needs_db
+class TestStalledJobReaping:
+    """A work-horse can die without recording anything (found 2026-07-31).
+
+    `tasks.py` records `timed_out` by catching RQ's JobTimeoutException, which
+    RQ raises *inside* the job. That works only while the job is running
+    Python. Offset detection blocks in GDAL's HTTP read, where a signal handler
+    cannot run, so RQ gave up waiting and SIGKILLed the horse:
+
+        11:37:41  run_job(05142cb9...) starts
+        11:48:41  killed horse pid 56
+                  Work-horse terminated unexpectedly; waitpid returned None
+
+    The row stayed at `reading` forever. Because `count_active` counts it, the
+    client sat at its one-job cap and could never submit again -- unrecoverable
+    without touching the database by hand.
+    """
+
+    def _stall(self, jobs, clean_db, age_seconds, status=JobStatus.READING):
+        from sqlalchemy import text
+
+        job = jobs.create("fake", KOLKATA_AOI, 10.0, [SCENE_ID], client_ip="203.0.113.9")
+        jobs.advance(job.id, JobStatus.SEARCHING)
+        jobs.advance(job.id, JobStatus.READING)
+        if status is not JobStatus.READING:
+            jobs.advance(job.id, status)
+        with clean_db.begin() as conn:
+            conn.execute(text(
+                "UPDATE jobs SET started_at = now() - make_interval(secs => :s) "
+                "WHERE id = :i"), {"s": age_seconds, "i": str(job.id)})
+        return job
+
+    def test_a_stalled_job_is_reaped(self, jobs, clean_db):
+        job = self._stall(jobs, clean_db, 3600)
+        assert jobs.reap_stalled(1500) == 1
+        assert jobs.get(job.id).status is JobStatus.TIMED_OUT
+
+    def test_a_slow_job_is_left_alone(self, jobs, clean_db):
+        """9 minutes 50 is slow, not dead. Reaping it would fail a live result."""
+        job = self._stall(jobs, clean_db, 590)
+        assert jobs.reap_stalled(1500) == 0
+        assert jobs.get(job.id).status is JobStatus.READING
+
+    def test_a_queued_job_that_never_started_is_still_reapable(self, jobs, clean_db):
+        """No started_at, so a naive clock would make it immortal."""
+        from sqlalchemy import text
+
+        job = jobs.create("fake", KOLKATA_AOI, 10.0, [SCENE_ID])
+        with clean_db.begin() as conn:
+            conn.execute(text(
+                "UPDATE jobs SET created_at = now() - make_interval(secs => 3600) "
+                "WHERE id = :i"), {"i": str(job.id)})
+        assert jobs.reap_stalled(1500) == 1
+        assert jobs.get(job.id).status is JobStatus.TIMED_OUT
+
+    def test_a_finished_job_is_never_touched(self, jobs, clean_db):
+        from sqlalchemy import text
+
+        job = jobs.create("fake", KOLKATA_AOI, 10.0, [SCENE_ID])
+        for status in (JobStatus.SEARCHING, JobStatus.READING, JobStatus.PROCESSING,
+                       JobStatus.WRITING_COG, JobStatus.COMPLETED):
+            jobs.advance(job.id, status)
+        with clean_db.begin() as conn:
+            conn.execute(text(
+                "UPDATE jobs SET started_at = now() - make_interval(secs => 9999) "
+                "WHERE id = :i"), {"i": str(job.id)})
+        assert jobs.reap_stalled(1500) == 0
+        assert jobs.get(job.id).status is JobStatus.COMPLETED
+
+    def test_a_ghost_does_not_block_the_next_submission(self, jobs, clean_db):
+        """The bug, end to end: one hard kill must not lock a client out.
+
+        Before the reap in `create`, this raised TooManyActiveJobs forever.
+        """
+        ghost = self._stall(jobs, clean_db, 3600)
+        fresh = jobs.create("fake", KOLKATA_AOI, 10.0, [SCENE_ID],
+                            client_ip="203.0.113.9", max_global=2, max_per_ip=1)
+        assert fresh.status is JobStatus.QUEUED
+        assert jobs.get(ghost.id).status is JobStatus.TIMED_OUT
+
+    def test_a_live_job_still_blocks_the_next_submission(self, jobs, clean_db):
+        """The reap must not become a way around the concurrency cap."""
+        self._stall(jobs, clean_db, 60)
+        with pytest.raises(TooManyActiveJobs):
+            jobs.create("fake", KOLKATA_AOI, 10.0, [SCENE_ID],
+                        client_ip="203.0.113.9", max_global=2, max_per_ip=1)

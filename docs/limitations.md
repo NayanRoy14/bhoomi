@@ -208,8 +208,15 @@ of Bhoomi most likely to still be wrong.**
 
 Detection is also expensive and highly variable: about 11 seconds warm, but **492 seconds** has
 been observed on a cold container. It is paid once per scene and then cached, but a first job on
-two uncached scenes can exceed the 10-minute limit and be stopped. Resubmitting works. See
-`PLAN.md` §5.3.2 — this is a known, unresolved operational risk.
+two uncached scenes can exceed the 10-minute limit and be stopped. See `PLAN.md` §5.3.2 — this is
+a known, unresolved operational risk.
+
+An earlier version of this page said such a job was "recoverable by resubmitting". **That was
+wrong**, and the correction is worth stating because the failure was invisible. When the job is
+blocked inside GDAL's HTTP read, the runtime cannot deliver the timeout exception into it, so the
+worker process is killed outright and the job row is never updated — it stayed `reading` forever,
+counted against the one-job-per-client limit, and locked that client out permanently. A reaper now
+closes such rows; see `PLAN.md` §5.3.2.
 
 ### Cloud masking depends on a band that is not always there
 

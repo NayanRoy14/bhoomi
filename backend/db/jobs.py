@@ -25,6 +25,7 @@ from __future__ import annotations
 import ipaddress
 import json
 import logging
+import os
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -179,6 +180,15 @@ _SELECT = text("""
 #: globally and 1 per IP.
 _ACTIVE_STATES = "('queued','searching','reading','processing','writing_cog')"
 
+#: How long an active job may go unreported before it is presumed dead.
+#:
+#: Comfortably above PLAN.md 8's 10-minute job timeout, because a job at 9
+#: minutes 50 is slow, not stalled, and reaping a live job would mark a result
+#: failed while it was still being computed. Twice the limit plus a margin: by
+#: then either RQ killed the work-horse or the worker itself is gone, and in
+#: both cases nothing is ever going to update that row.
+STALLED_AFTER_SECONDS = int(os.getenv("BHOOMI_STALLED_AFTER", "1500"))
+
 
 def normalize_ip(value: str | None) -> str | None:
     """A value the INET column will accept, or None.
@@ -265,6 +275,25 @@ class JobStore:
                 # One arbitrary but fixed key; every submission serialises on it.
                 conn.execute(text("SELECT pg_advisory_xact_lock(0x62686D31)"))
 
+                # Clear ghosts before counting. A work-horse killed mid-job
+                # leaves a row in an active state that nothing in-process can
+                # ever close (see `reap_stalled`), and it counts here -- so
+                # without this a single hard kill permanently exhausts that
+                # client's one-job budget. Done inside the same lock and the
+                # same transaction as the count it corrects, so two concurrent
+                # submissions cannot see different answers.
+                conn.execute(text(f"""
+                    UPDATE jobs
+                       SET status = 'timed_out', completed_at = now(),
+                           error_message = :message
+                     WHERE status::text IN {_ACTIVE_STATES}
+                       AND COALESCE(started_at, created_at)
+                           < now() - make_interval(secs => :seconds)
+                """), {"seconds": STALLED_AFTER_SECONDS,
+                       "message": ("The worker stopped without reporting a result. "
+                                   "This usually means the job exceeded its time "
+                                   "limit. Submit it again.")})
+
                 if max_global is not None:
                     active = conn.execute(text(
                         f"SELECT count(*) FROM jobs WHERE status::text IN {_ACTIVE_STATES}"
@@ -290,6 +319,76 @@ class JobStore:
         with self.engine.connect() as conn:
             row = conn.execute(_SELECT, {"id": str(job_id)}).first()
         return _job_from_row(row) if row is not None else None
+
+    def recent(self, limit: int = 20, offset: int = 0) -> tuple[list[Job], int]:
+        """A page of jobs, newest first, with the total count.
+
+        Exists for OGC API - Processes' job list (PLAN.md 7.6), which is a
+        conformance class of its own. The total comes back alongside because
+        the standard's `JobList` is paged and a client cannot page without
+        knowing when to stop.
+
+        Not filtered by client: jobs carry an IP for rate limiting, not an
+        identity, and treating one as the other would be inventing
+        authentication out of a network address. So this is a public list of a
+        public queue -- which is also why `Job` exposes no `client_ip`.
+        """
+        with self.engine.connect() as conn:
+            total = conn.execute(text("SELECT count(*) FROM jobs")).scalar_one()
+            rows = conn.execute(text("""
+                SELECT id, process, status, progress, ST_AsGeoJSON(aoi) AS aoi,
+                       aoi_area_km2, scene_ids, parameters, error_message,
+                       created_at, started_at, completed_at
+                FROM jobs ORDER BY created_at DESC, id DESC
+                LIMIT :limit OFFSET :offset
+            """), {"limit": limit, "offset": offset}).fetchall()
+        return [_job_from_row(row) for row in rows], int(total)
+
+    def reap_stalled(self, older_than_seconds: int) -> int:
+        """Fail jobs stuck in an active state past any plausible runtime.
+
+        **Why this is needed, found 2026-07-31 by watching it happen.**
+        `tasks.py` records `timed_out` by catching RQ's `JobTimeoutException`,
+        which RQ raises *inside* the job. That works only if the job is running
+        Python. Offset detection blocks inside GDAL's HTTP read, and a Python
+        signal handler cannot run during a C call -- so RQ waited, gave up, and
+        SIGKILLed the work-horse:
+
+            11:37:41  run_job(05142cb9...) starts
+            11:48:41  killed horse pid 56
+                      Work-horse terminated unexpectedly; waitpid returned None
+
+        The process died between bytecodes with no chance to record anything,
+        so the row stayed at `reading` **forever**. That is worse than a job
+        that merely failed: `count_active` counts it, so the client sat at its
+        one-job cap (PLAN.md 8) and could never submit again. Not "recoverable
+        by resubmitting" -- unrecoverable without a DBA.
+
+        A reaper is the right shape because the failure is *the absence of the
+        process that would have reported it*. Nothing in-process can cover
+        that; something outside has to notice the silence.
+
+        `started_at` is the clock where it exists, `created_at` otherwise -- a
+        job killed before it ever started has no `started_at`, and would
+        otherwise be immortal.
+        """
+        with self.engine.begin() as conn:
+            result = conn.execute(text(f"""
+                UPDATE jobs
+                   SET status = 'timed_out',
+                       completed_at = now(),
+                       error_message = :message
+                 WHERE status::text IN {_ACTIVE_STATES}
+                   AND COALESCE(started_at, created_at)
+                       < now() - make_interval(secs => :seconds)
+            """), {"seconds": older_than_seconds,
+                   "message": ("The worker stopped without reporting a result. "
+                               "This usually means the job exceeded its time "
+                               "limit. Submit it again.")})
+        if result.rowcount:
+            logger.warning("reaped %d stalled job(s) older than %ds",
+                           result.rowcount, older_than_seconds)
+        return result.rowcount
 
     def position_in_queue(self, job_id: uuid.UUID | str) -> int:
         """How many queued jobs are ahead of this one. 0 means next."""

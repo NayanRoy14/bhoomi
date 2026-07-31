@@ -203,3 +203,41 @@ class TestPollingBudget:
             "url": type("U", (), {"path": "/api/v1/jobs/abc/download"})(),
         })()
         assert ratelimit.is_poll(request) is True
+
+
+class TestOgcPollingBudget:
+    """`/ogc/jobs` reads are polls too (PLAN.md 7.6).
+
+    Both routes reach the same queue. Leaving the standards door on the
+    120/hour search budget while the native one gets 1200 would make the
+    standard ten times more expensive to use for identical work.
+    """
+
+    def _get(self, path):
+        from starlette.datastructures import Headers
+        from starlette.requests import Request
+
+        scope = {"type": "http", "method": "GET", "path": path,
+                 "headers": Headers({}).raw, "query_string": b"",
+                 "client": ("203.0.113.1", 1234), "scheme": "http",
+                 "server": ("test", 80), "root_path": ""}
+        return Request(scope)
+
+    def test_ogc_job_reads_use_the_poll_budget(self):
+        from backend.api.ratelimit import is_poll
+
+        assert is_poll(self._get("/ogc/jobs"))
+        assert is_poll(self._get("/ogc/jobs/abc"))
+        assert is_poll(self._get("/ogc/jobs/abc/results"))
+
+    def test_native_job_reads_still_do(self):
+        from backend.api.ratelimit import is_poll
+
+        assert is_poll(self._get("/api/v1/jobs/abc"))
+
+    def test_discovery_is_not_a_poll(self):
+        """Read once at the start of a session, not in a loop."""
+        from backend.api.ratelimit import is_poll
+
+        assert not is_poll(self._get("/ogc/processes"))
+        assert not is_poll(self._get("/conformance"))

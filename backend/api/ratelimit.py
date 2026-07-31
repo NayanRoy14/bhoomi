@@ -159,13 +159,22 @@ def get_poll_limiter() -> RateLimiter:
     return _poll_limiter
 
 
+#: Prefixes whose GETs are job-state reads. Both doors to the same queue:
+#: `/ogc/jobs` is what an OGC API - Processes client polls (PLAN.md 7.6), and
+#: it is the *same operation* as `/api/v1/jobs`. Leaving it on the search
+#: budget would have made the standards interface ten times more expensive to
+#: use than the native one for identical work -- which is the opposite of what
+#: implementing a standard is for.
+_JOB_READ_PREFIXES = ("/api/v1/jobs", "/ogc/jobs")
+
+
 def is_poll(request: Request) -> bool:
     """A read of job state: status, result, or the finished raster.
 
-    Reads only, and only under /api/v1/jobs. `POST` to the same prefix is a
-    submission and keeps the search budget on top of its own 20/hour.
+    Reads only. `POST` to the same prefixes is a submission and keeps the
+    search budget on top of its own 20/hour.
     """
-    return request.method == "GET" and request.url.path.startswith("/api/v1/jobs")
+    return request.method == "GET" and request.url.path.startswith(_JOB_READ_PREFIXES)
 
 #: Monitoring must never be throttled -- a health check that starts returning
 #: 429 reads as an outage and orchestrators restart containers over it.

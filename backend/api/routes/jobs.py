@@ -17,23 +17,14 @@ from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
 from backend import storage, tiles
 from backend.api import errors, schemas
 from backend.api.deps import get_catalogue, get_job_store, get_scene_store
-from backend.api.ratelimit import client_key, get_job_limiter
+from backend.api.submit import submit_job
 from backend.db import SceneStore
-from backend.db.jobs import JobStatus, JobStore, JobsUnavailable, TooManyActiveJobs
-from backend.queue import connection as queue_connection
+from backend.db.jobs import JobStatus, JobStore
 from backend.queue import processes
-from backend.queue.tasks import run_job
-from backend.resolve import resolve_scene
 from catalogue import Catalogue
-from processing import raster_utils
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1/jobs", tags=["jobs"])
-
-#: An AOI computed to be inside a footprint can land a hair under 1.0 through
-#: floating point alone. 0.999 of a 500 km² AOI is half a square kilometre --
-#: below any real scene-boundary crossing, which loses whole percentages.
-COVERAGE_TOLERANCE = 0.999
 
 
 @router.post("", response_model=schemas.JobCreateResponse, status_code=202,
@@ -46,96 +37,25 @@ def create_job(
     store: SceneStore = Depends(get_scene_store),
     catalogue: Catalogue = Depends(get_catalogue),
 ) -> schemas.JobCreateResponse:
-    if not queue_connection.queue_available():
-        raise errors.jobs_unavailable("no job queue is configured")
+    """Submit a job (7.3).
 
-    spec = processes.get(request.process)
-    if spec is None:
-        raise errors.unknown_process(request.process, processes.names())
-
-    if len(request.scene_ids) != spec.scene_count:
-        raise errors.wrong_scene_count(spec.name, spec.scene_count,
-                                       len(request.scene_ids))
-
-    if spec.scene_count > 1 and len(set(request.scene_ids)) != len(request.scene_ids):
-        raise errors.duplicate_scenes(request.scene_ids[0])
-
-    # 5.4.4: "same index, same parameters on both sides -- enforce this in the
-    # API, do not trust input." The index is the only parameter a change job
-    # takes, and it applies to both dates by construction.
-    if spec.name == "change":
-        index = request.parameters.get("index", processes.DEFAULT_CHANGE_INDEX)
-        if index not in processes.CHANGEABLE_INDICES:
-            raise errors.unknown_index(str(index),
-                                       list(processes.CHANGEABLE_INDICES))
-
-    aoi = request.aoi.as_dict()
-    area_km2 = raster_utils.geometry_area_km2(aoi)
-    if area_km2 > schemas.MAX_AOI_KM2:
-        raise errors.aoi_too_large(area_km2, schemas.MAX_AOI_KM2)
-
-    # Rate limited here, after the cheap structural checks and before anything
-    # that costs a network call or a row. A malformed submission should not
-    # consume an hour's job budget; the global 120/hour middleware already
-    # bounds how fast those can be sent.
-    allowed, retry_after = get_job_limiter().check(client_key(http_request))
-    if not allowed:
-        error = errors.BhoomiError(
-            429, "rate_limited",
-            f"Too many jobs. The limit is {schemas.JOB_RATE_LIMIT} per hour. "
-            f"Try again in {retry_after} seconds.",
-            retry_after=retry_after)
-        error.headers = {"Retry-After": str(retry_after)}
-        raise error
-
-    # D3: one scene per analysis, and the AOI must fit inside it. Checked
-    # before the job is created so the rejection is immediate rather than a
-    # failure the user has to poll for.
-    for scene_id in request.scene_ids:
-        scene = resolve_scene(scene_id, store, catalogue)
-        coverage = scene.aoi_coverage(aoi)
-        if coverage < COVERAGE_TOLERANCE:
-            raise errors.aoi_spans_scenes(coverage, scene_id)
-
-    client_ip = http_request.client.host if http_request.client else None
-    try:
-        job = jobs.create(
-            process=spec.name, aoi=aoi, aoi_area_km2=area_km2,
-            scene_ids=request.scene_ids, parameters=request.parameters,
-            client_ip=client_ip,
-            max_global=schemas.MAX_CONCURRENT_JOBS,
-            max_per_ip=schemas.MAX_CONCURRENT_JOBS_PER_IP,
-        )
-    except TooManyActiveJobs as exc:
-        raise errors.too_many_active_jobs(exc.active, exc.limit, exc.scope) from None
-    except JobsUnavailable as exc:
-        raise errors.jobs_unavailable(str(exc)) from None
-
-    queue = queue_connection.get_queue()
-    try:
-        queue.enqueue(run_job, str(job.id),
-                      job_timeout=queue_connection.JOB_TIMEOUT_SECONDS,
-                      result_ttl=queue_connection.RESULT_TTL_SECONDS)
-    except Exception as exc:
-        # The row exists but nothing will ever pick it up. Failing it now is
-        # the difference between an error the user sees and a job that sits at
-        # "queued" until they give up.
-        logger.exception("enqueue failed for job %s", job.id)
-        jobs.advance(job.id, JobStatus.FAILED,
-                     error_message="The job could not be queued. Please retry.",
-                     error_detail=repr(exc))
-        raise errors.jobs_unavailable("the job queue could not be reached") from None
-
+    Every check lives in `submit_job`, shared with the OGC facade (7.6), so a
+    job cannot be validated one way here and another way there.
+    """
+    job = submit_job(
+        process=request.process, aoi=request.aoi.as_dict(),
+        scene_ids=request.scene_ids, parameters=request.parameters,
+        http_request=http_request, jobs=jobs, store=store, catalogue=catalogue,
+    )
     position = jobs.position_in_queue(job.id)
-    logger.info("job %s submitted: %s over %.1f km², position %d",
-                job.id, spec.name, area_km2, position)
 
     response.headers["Location"] = f"/api/v1/jobs/{job.id}"
     return schemas.JobCreateResponse(
         job_id=str(job.id),
         status=job.status.value,
         position_in_queue=position,
-        estimated_seconds=processes.estimate_for(spec, area_km2),
+        estimated_seconds=processes.estimate_for(
+            processes.get(job.process), job.aoi_area_km2),
         links=[
             schemas.Link(rel="status", href=f"/api/v1/jobs/{job.id}"),
             schemas.Link(rel="result", href=f"/api/v1/jobs/{job.id}/result"),

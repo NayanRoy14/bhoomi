@@ -811,6 +811,41 @@ sample degrades to "inconclusive, warn and use metadata" rather than to a wrong 
 would push Delhi-2022-04-19-like scenes onto a metadata fallback that is wrong for exactly that
 scene, so it is not free.
 
+### The recovery story was wrong. Fixed 2026-07-31.
+
+This section said the timeout was "recoverable by resubmitting". **It was not.** Watching one
+happen during the §7.6 work:
+
+```
+11:37:41  run_job(05142cb9…) starts        — NDVI on an uncached scene
+11:48:41  killed horse pid 56
+          Work-horse terminated unexpectedly; waitpid returned None
+```
+
+`tasks.py` records `timed_out` by catching RQ's `JobTimeoutException`, which RQ raises **inside**
+the job. That only works while the job is running Python. Offset detection blocks inside GDAL's
+HTTP read, and a Python signal handler cannot run during a C call — so RQ waited, gave up, and
+**SIGKILLed** the work-horse. The process died with no chance to record anything, and the row
+stayed at `reading` permanently.
+
+That is worse than a failed job. `count_active` counts `reading`, so the client sat at its
+one-job cap (§8) and **could never submit again** — not recoverable by resubmitting, not
+recoverable at all without editing the database by hand. Which is exactly what had to be done to
+carry on testing.
+
+**Fixed with a reaper**, because the failure *is* the absence of the process that would have
+reported it — nothing in-process can cover that, so something outside has to notice the silence.
+`JobStore.reap_stalled` fails any active job whose `COALESCE(started_at, created_at)` is older
+than `BHOOMI_STALLED_AFTER` (default 1500 s), and `create` runs the same statement inside the
+advisory lock, in the same transaction as the count it corrects — so a ghost is cleared exactly
+when it would otherwise block someone, and two concurrent submissions cannot see different
+answers.
+
+1500 s is deliberately well above the 10-minute limit: a job at 9 min 50 is *slow*, not dead, and
+reaping a live one would mark a result failed while it was still being computed. Tested both
+ways — a 3600 s-old ghost is reaped and stops blocking; a 590 s-old job is left alone and still
+blocks, so the reaper cannot become a way around the concurrency cap.
+
 ---
 
 > **UX gap found 2026-07-31.** The change picker offers only scenes from the *current* search,
@@ -1275,6 +1310,44 @@ implementation. `/api/v1/jobs` and `/ogc/jobs/{id}` read the same `jobs` table.
 Acceptance test for this feature: **a QGIS user, or a Python script using `owslib` or plain
 `requests`, executes an NDVI process and loads the result — without opening the website.** If
 that works, the standards claim is real.
+
+> ✅ **Implemented and passing, 2026-07-31.** `examples/ogc_client.py` is that acceptance test
+> written out: standard library only, no `requests` and no `owslib`, and it knows no Bhoomi URL
+> beyond the base. It reads `/conformance`, lists processes, reads the input schema from the
+> process description, executes, polls the `self` link, and fetches the raster from the `results`
+> document. Run against the stack it printed:
+>
+> ```
+> 201 Created -> /ogc/jobs/4243ccf4-...   Preference-Applied: respond-async
+> accepted 0% -> running 30% -> successful 100%
+> ndvi: image/tiff; application=geotiff; profile=cloud-optimized
+> wrote outputs/ogc_result.tif (951,148 bytes) — TIFF byte-order marker verified
+> ```
+>
+> The raster is 519×449, EPSG:32645, 10 m, a valid COG with overviews, median **+0.3596** —
+> identical to what the native route produces for that scene — carrying its provenance tags
+> including `BHOOMI_BOA_OFFSET_BASIS = pixels`.
+>
+> **O5 resolved: hand-rolled.** `backend/api/routes/ogc.py` is ~400 lines against a second
+> framework, its own config format and a second path to the database. The default in §3.2 was to
+> hand-roll and nothing argued otherwise once the shared submitter existed.
+>
+> **The facade is literal.** Both doors call `backend/api/submit.py`; `/ogc` adds request and
+> response shapes and nothing else. `tests/test_ogc.py` asserts the thing that would break if
+> that ever stopped being true — the same job visible and identical through both APIs — plus that
+> the AOI cap, the scene-count rule and the per-IP concurrency cap all apply through the
+> standards door. A conformance class is declared **only** where it is implemented: no
+> `sync-execute` (there is no synchronous mode), no `dismiss` (`DELETE /jobs/{id}` does not
+> exist), no `callback`.
+>
+> **Two defects this work surfaced**, both fixed here and neither in the OGC layer itself:
+>
+> - **`/ogc/jobs` reads were on the wrong budget.** `is_poll` matched only `/api/v1/jobs`, so a
+>   standards client polling its own job spent the 120/hour *search* budget while a native client
+>   doing the identical thing spent the 1200/hour poll budget. Found by the acceptance script
+>   crashing on a 429. The standard being ten times more expensive to use is the opposite of the
+>   point.
+> - **A killed work-horse left a job active forever.** See §5.3.2 — this one is serious.
 
 ---
 

@@ -135,6 +135,19 @@ def job_failed(job_id: str, status: str, message: str | None) -> BhoomiError:
         status=status)
 
 
+def missing_input(process_id: str, name: str, expected: str) -> BhoomiError:
+    """400: an OGC execute request omitted a required input, or sent the wrong shape.
+
+    Names what was expected rather than only what was missing. The OGC process
+    description already declares this, but a client that got it wrong is not
+    reading the description, so the error has to carry the answer.
+    """
+    return BhoomiError(
+        400, "missing_input",
+        f"Process {process_id!r} requires input {name!r}: {expected}. "
+        f"See GET /ogc/processes/{process_id} for the full input schema.")
+
+
 def unknown_output(job_id: str, requested: str, available: list[str]) -> BhoomiError:
     """400: the caller named an output this endpoint does not serve.
 
