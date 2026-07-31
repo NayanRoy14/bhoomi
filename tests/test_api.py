@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 
 from backend.api.deps import get_catalogue
 from backend.api.main import app
+from backend.api.routes import health as health_routes
 from catalogue import CatalogueError, Scene, SearchQuery
 from tests.test_catalogue import KOLKATA_AOI, TILE_45QXE, TILE_45QXF, item
 
@@ -67,8 +68,34 @@ class TestHealth:
         assert data["status"] == "ok"
         assert data["catalogue"] == "stub"
 
-    def test_queue_fields_are_null_until_january(self, client):
-        assert client.get("/health").json()["queue_depth"] is None
+    def test_queue_fields_are_null_without_a_queue(self, client, monkeypatch):
+        """No Redis configured is a valid deployment, not an error.
+
+        This used to assert the fields were null unconditionally -- true only
+        before the January queue existed. Once Redis is reachable the endpoint
+        correctly reports a real depth, so the test failed for anyone running
+        the suite against live services. What is worth pinning is the shape
+        when there is no queue, so the condition is now forced rather than
+        inherited from whatever the environment happens to set.
+        """
+        monkeypatch.setattr(health_routes.queue_connection, "get_queue", lambda: None)
+        body = client.get("/health").json()
+        assert body["queue_depth"] is None
+        assert body["workers"] is None
+        assert body["status"] == "ok"
+
+    def test_an_unreachable_queue_does_not_fail_the_health_check(self, client, monkeypatch):
+        """The point of /health is to answer when things are broken."""
+        class Unreachable:
+            connection = None
+            def __len__(self):
+                raise ConnectionError("redis is down")
+
+        monkeypatch.setattr(health_routes.queue_connection, "get_queue",
+                            lambda: Unreachable())
+        response = client.get("/health")
+        assert response.status_code == 200
+        assert response.json()["queue_depth"] is None
 
     def test_does_not_call_the_catalogue(self, scenes):
         """A health check that depends on a third party reports their outage as ours."""

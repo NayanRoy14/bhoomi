@@ -1,0 +1,207 @@
+# Continuous integration.
+#
+# PLAN.md 13 risk R3 -- "harmonization bug ships silently" -- names its own
+# mitigation: the 5.3 regression test running in CI. That mitigation did not
+# exist, and in the meantime the reflectance detector shipped wrong twice
+# (5.3.1, 5.3.1c). Both were caught by manually pointing it at new data. This
+# file is the gate that was supposed to exist.
+#
+# Four jobs, deliberately separate so a red badge says *what* broke:
+#
+#   tests         the suite a clean clone can run, on both Python versions
+#                 this project is developed and shipped on
+#   harmonize     the regression gate, its own job because it is the one
+#                 failure that produces confidently wrong output rather than
+#                 a visible error
+#   integration   the ~79 tests that need Postgres, Redis and S3, plus the
+#                 migration round trip
+#   frontend      typecheck and build
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: tests (py${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.12 is what backend/Dockerfile ships; 3.14 is what the project is
+        # developed on. Testing both is what stops "works on my machine" --
+        # they are two minor versions apart and numpy/rasterio move fast.
+        python: ["3.12", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Run the suite a clean clone can run
+        # No services configured, so the Postgres/Redis/S3 tests skip. This is
+        # exactly what a stranger following the README gets, and it must pass.
+        env:
+          BHOOMI_CACHE_DIR: ""
+        run: python -m pytest -p no:warnings
+
+  harmonize:
+    name: harmonization regression gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Replay the 48-scene calibration through the shipped resolver
+        # Exits non-zero if any scene is misclassified. Reads committed
+        # measurements from probes/calibration/, so it needs no network and
+        # cannot be flaky -- the whole point is that it fails only when the
+        # resolver's behaviour changes.
+        run: python -m probes.verify_offset_rule
+
+      - name: The harmonization unit tests, called out by name
+        run: python -m pytest tests/test_harmonize.py -p no:warnings
+
+  integration:
+    name: integration (postgres + redis + s3)
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        # postgis, not plain postgres: scenes.geometry is GEOMETRY(Polygon,4326)
+        # and migration 0001 enables the extension.
+        image: postgis/postgis:16-3.4
+        env:
+          POSTGRES_USER: bhoomi
+          POSTGRES_PASSWORD: bhoomi
+          POSTGRES_DB: bhoomi
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U bhoomi -d bhoomi"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      - name: Start MinIO
+        # Run rather than declared as a service: MinIO needs `server /data` as
+        # its command, and GitHub service containers cannot override one.
+        # MinIO stands in for R2, which is reached through the same S3 API
+        # (PLAN.md D14) -- this proves the client speaks S3, and nothing about
+        # R2's own latency or durability (PLAN.md 9.4).
+        run: |
+          docker run -d --name minio -p 9000:9000 \
+            -e MINIO_ROOT_USER=minioadmin \
+            -e MINIO_ROOT_PASSWORD=minioadmin \
+            minio/minio:latest server /data
+          for _ in $(seq 1 30); do
+            if curl -sf http://localhost:9000/minio/health/live >/dev/null; then
+              echo "minio ready"; exit 0
+            fi
+            sleep 2
+          done
+          echo "minio did not become ready"; docker logs minio; exit 1
+
+      - name: Migrations apply, roll back and re-apply
+        # A downgrade that does not work is a downgrade nobody can use in an
+        # incident. Checked here rather than trusted.
+        env:
+          BHOOMI_DATABASE_URL: postgresql://bhoomi:bhoomi@localhost:5432/bhoomi
+        run: |
+          alembic upgrade head
+          alembic downgrade -1
+          alembic upgrade head
+          alembic current
+
+      - name: Full suite, services live
+        env:
+          BHOOMI_TEST_DATABASE_URL: postgresql://bhoomi:bhoomi@localhost:5432/bhoomi
+          BHOOMI_TEST_REDIS_URL: redis://localhost:6379/1
+          BHOOMI_TEST_S3_ENDPOINT: http://localhost:9000
+          BHOOMI_TEST_S3_ACCESS_KEY_ID: minioadmin
+          BHOOMI_TEST_S3_SECRET_ACCESS_KEY: minioadmin
+          BHOOMI_CACHE_DIR: ""
+        run: python -m pytest -p no:warnings
+
+      - name: MinIO logs on failure
+        if: failure()
+        run: docker logs minio
+
+  frontend:
+    name: frontend
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build
+        # There are no frontend tests yet (a real gap -- 1,600 lines of
+        # TypeScript with no coverage). A build that fails to compile is still
+        # worth catching, and this is the floor, not the goal.
+        run: npm run build
