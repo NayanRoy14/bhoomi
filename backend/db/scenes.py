@@ -48,8 +48,8 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_CATALOGUE = "earth-search"
 
-# `boa_offset_present` appears in neither the insert nor the update list. It is
-# measured from pixels at ~6 s a time (PLAN.md 5.3) and is *not* catalogue
+# `boa_floor_dn` appears in neither the insert nor the update list. It is
+# measured from pixels at ~11 s a time (PLAN.md 5.3) and is *not* catalogue
 # metadata, so a re-search must never overwrite it with NULL. A reprocessed
 # scene is safe here: Earth Search gives it a new id (..._0_L2A -> ..._1_L2A),
 # so it lands as a new row rather than inheriting a stale measurement.
@@ -218,18 +218,22 @@ class PostgresSceneStore(SceneStore):
 
 
 class PostgresOffsetCache:
-    """`cache.OffsetCache` backed by `scenes.boa_offset_present`.
+    """`cache.OffsetCache` backed by `scenes.boa_floor_dn`.
 
     Anticipated in `cache.py`: the same three methods, a different default, and
     nothing else moves. The one real constraint is that the table is keyed on
     (catalogue, external_id) while the OffsetCache protocol passes only a scene
     id -- so the catalogue is fixed per instance rather than per call.
 
+    Stores the measured DN floor, not the offset verdict derived from it. The
+    verdict column it replaced had to be nulled wholesale when the detector was
+    recalibrated (migration 0003); the measurement never needs that.
+
     `set` updates an existing row and does nothing if there is none. It cannot
     insert: the row needs a footprint, assets and an acquisition time that a
-    bare (scene_id, bool) pair does not carry. In practice the row is already
+    bare (scene_id, float) pair does not carry. In practice the row is already
     there, because a scene reaches processing by way of a search that cached it.
-    When it is not, the cost is re-measuring 6 s later -- never a wrong value.
+    When it is not, the cost is re-measuring later -- never a wrong value.
     """
 
     def __init__(self, catalogue: str = DEFAULT_CATALOGUE, engine=None) -> None:
@@ -240,32 +244,32 @@ class PostgresOffsetCache:
     def engine(self):
         return self._engine if self._engine is not None else get_engine()
 
-    def get(self, scene_id: str) -> bool | None:
+    def get(self, scene_id: str) -> float | None:
         engine = self.engine
         if engine is None:
             return None
         try:
             with engine.connect() as conn:
                 row = conn.execute(
-                    text("""SELECT boa_offset_present FROM scenes
+                    text("""SELECT boa_floor_dn FROM scenes
                             WHERE catalogue = :catalogue AND external_id = :external_id"""),
                     {"catalogue": self.catalogue, "external_id": scene_id},
                 ).first()
         except SQLAlchemyError as exc:
             logger.warning("offset cache read failed for %s: %s", scene_id, exc)
             return None
-        return None if row is None else row[0]
+        return None if row is None or row[0] is None else float(row[0])
 
-    def set(self, scene_id: str, offset_present: bool) -> None:
+    def set(self, scene_id: str, floor_dn: float) -> None:
         engine = self.engine
         if engine is None:
             return
         try:
             with engine.begin() as conn:
                 result = conn.execute(
-                    text("""UPDATE scenes SET boa_offset_present = :value
+                    text("""UPDATE scenes SET boa_floor_dn = :value
                             WHERE catalogue = :catalogue AND external_id = :external_id"""),
-                    {"value": offset_present, "catalogue": self.catalogue,
+                    {"value": float(floor_dn), "catalogue": self.catalogue,
                      "external_id": scene_id},
                 )
         except SQLAlchemyError as exc:
@@ -279,7 +283,7 @@ class PostgresOffsetCache:
         if engine is None:
             return
         with engine.begin() as conn:
-            conn.execute(text("UPDATE scenes SET boa_offset_present = NULL"))
+            conn.execute(text("UPDATE scenes SET boa_floor_dn = NULL"))
 
 
 def default_scene_store() -> SceneStore:

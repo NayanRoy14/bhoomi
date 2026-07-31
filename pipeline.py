@@ -60,6 +60,10 @@ class IndexResult:
     valid_fraction: float
     offset_present: bool
     baseline: str | None
+    #: What settled the reflectance convention: "pixels", "baseline" or
+    #: "metadata". Recorded in the GeoTIFF because "metadata" means the pixels
+    #: could not decide, and a reader deserves to know which of the two it got.
+    offset_basis: str = "pixels"
     warnings: list[str] = field(default_factory=list)
 
     def stats(self) -> dict:
@@ -82,7 +86,8 @@ class IndexResult:
                 self.index, [self.scene_id], formula,
                 baselines=[self.baseline] if self.baseline else None,
                 valid_fraction=self.valid_fraction,
-                extra={"BHOOMI_BOA_OFFSET_PRESENT": self.offset_present}))
+                extra={"BHOOMI_BOA_OFFSET_PRESENT": self.offset_present,
+                       "BHOOMI_BOA_OFFSET_BASIS": self.offset_basis}))
 
 
 @dataclass
@@ -109,21 +114,40 @@ class ChangeResult:
                        "BHOOMI_WARNINGS": " | ".join(self.warnings) or "none"}))
 
 
+def offset_decision(scene: Scene, band: str = "nir") -> harmonize.OffsetDecision:
+    """How this scene's reflectance should be interpreted, and on what evidence.
+
+    The pixel floor is measured from a decimated overview of the full tile and
+    takes precedence over metadata, every field of which has been observed wrong
+    (PLAN.md 5.3). It is one-sided: it can prove the offset ABSENT and never
+    that it is present, so a bright tile with no dark target falls back to
+    metadata and the decision carries a warning.
+
+    Only the measurement is cached. The verdict is re-derived on every call, so
+    a change to the threshold takes effect without invalidating anything.
+    """
+    floor = _offset_cache.get(scene.id)
+    if floor is None:
+        evidence = harmonize.measure_offset_floor_in_scene(scene.href(band))
+        _offset_cache.set(scene.id, evidence.floor_dn)
+    else:
+        evidence = harmonize.OffsetEvidence(floor_dn=floor, sample_pixels=0)
+
+    decision = harmonize.resolve_offset(evidence, scene.properties)
+    logger.info("scene %s: offset_present=%s (basis: %s, floor %.0f DN)",
+                scene.id, decision.present, decision.basis, evidence.floor_dn)
+    return decision
+
+
 def offset_present(scene: Scene, band: str = "nir") -> bool:
     """Whether the BOA offset is in this scene's pixels.
 
-    Determined from a decimated overview of the full tile, not from metadata --
-    every metadata field claiming to answer this has been observed wrong
-    (PLAN.md 5.3).
+    Thin wrapper over :func:`offset_decision` for callers that do not need the
+    basis or the warning. Prefer :func:`offset_decision` inside the pipeline --
+    dropping the warning is exactly the silent-uncertainty failure this project
+    is trying not to have.
     """
-    cached = _offset_cache.get(scene.id)
-    if cached is not None:
-        return cached
-
-    detected = harmonize.detect_offset_in_scene(scene.href(band))
-    _offset_cache.set(scene.id, detected)
-    logger.info("scene %s: offset_present=%s (measured from pixels)", scene.id, detected)
-    return detected
+    return offset_decision(scene, band).present
 
 
 def compute_index(
@@ -157,7 +181,8 @@ def compute_index(
 
     from catalogue.base import SearchQuery
     grid = grid_for_aoi(SearchQuery(aoi=aoi).bbox(), resolution)
-    present = offset_present(scene)
+    decision = offset_decision(scene)
+    present = decision.present
 
     raw = {b: raster_utils.read_to_grid(scene.href(b), grid,
                                         _resampling_for(resolution, b))
@@ -168,6 +193,8 @@ def compute_index(
         invalid |= (array == 0)
 
     warnings: list[str] = []
+    if decision.warning:
+        warnings.append(decision.warning)
     if "scl" in scene.assets:
         scl = raster_utils.read_scl_to_grid(scene.href("scl"), grid)
         invalid |= masking.scl_mask(scl, mask_snow=mask_snow)
@@ -189,7 +216,8 @@ def compute_index(
 
     return IndexResult(array=array, grid=grid, index=index, scene_id=scene.id,
                        valid_fraction=kept, offset_present=present,
-                       baseline=scene.processing_baseline, warnings=warnings)
+                       baseline=scene.processing_baseline,
+                       offset_basis=decision.basis, warnings=warnings)
 
 
 def _resampling_for(target_resolution: float, band: str):

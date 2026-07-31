@@ -163,21 +163,48 @@ answer and all three have been observed wrong. Bhoomi detects it from the pixels
 Getting it wrong does not crash anything. It silently shifts NDVI by ~0.24 while leaving every
 value inside its valid range.
 
-The detector has already been wrong once in a way that took real data to expose — its threshold
-was calibrated at one sampling density and applied at another, misclassifying four of eight
-scenes tested. See `PLAN.md` §5.3.1. **This is the part of Bhoomi most likely to still be
-wrong.**
+The detector has now been wrong **twice**, both times found only by pointing it at data it had
+not seen.
 
-The decision has been **independently verified for one scene** — the one the fix changed. NDVI
-recomputed from raw bands without any Bhoomi code agrees with Bhoomi's output on 100 % of 233,027
-pixels; the alternative branch puts 48 % of pixels outside the mathematically possible range; and
-water, vegetation and built-up — classified from raw bands, not from NDVI — land at −0.09, +0.59
-and +0.21 respectively, which a harmonization error could not produce. See `PLAN.md` §5.3.1b.
+**First**, its threshold was calibrated at one sampling density and applied at another,
+misclassifying four of eight scenes tested (`PLAN.md` §5.3.1).
 
-That is one scene. The calibration still rests on **ten scenes over one tile**, and the tenth sat
-below the range the other nine established — correctly classified, but on about half the margin.
-Only one genuinely offset-bearing product has ever been measured. A wider sample, over more tiles
-and more of the world, would be the honest next step.
+**Second, and worse: the statistic itself was measuring the wrong thing.** It counted how many
+pixels fell below a dark threshold — which works only where dark pixels exist. Widening the
+sample from ten scenes on one wet tile to **48 scenes across 8 regions and 6 years** showed it
+misclassifying **36 % of offset-absent scenes**:
+
+| region | dark fraction, min … max over six years | |
+|---|---|---|
+| thar-desert | 0.0057 % … 0.0206 % | **entirely below the 1 % threshold** |
+| delhi-urban | 0.0184 % … 0.3265 % | **entirely below the 1 % threshold** |
+| sundarbans | 8.10 % … 30.66 % | clear |
+| mumbai-coast | 41.97 % … 60.70 % | clear |
+
+Every Thar and Delhi scene is offset-**absent**, and every one would have been called
+offset-present — shifting its NDVI by ~0.24 with nothing out of range to reveal it. The rule
+worked on Kolkata because Kolkata is wet. It was measuring terrain.
+
+**What replaced it** is a one-sided test: an offset-bearing product cannot hold pixels below
+~800 DN, so a low floor *proves* the offset absent, while a high floor proves nothing — a bright
+desert tile and an offset-bearing scene look identical up there, and in the measured sample the
+one offset-present scene (floor 1003 DN) sits *inside* the range of offset-absent ones (922 to
+2048 DN). So the pixels can only ever say "absent", and where they are silent the decision falls
+back to metadata **and the result carries a warning saying so**. Across the 48 scenes: 0
+misclassified, against 17 for the rule it replaces.
+
+The decision has also been **independently verified for one scene**. NDVI recomputed from raw
+bands without any Bhoomi code agrees with Bhoomi's output on 100 % of 233,027 pixels; the
+alternative branch puts 48 % of pixels outside the mathematically possible range; and water,
+vegetation and built-up — classified from raw bands, not from NDVI — land at −0.09, +0.59 and
++0.21 respectively, which a harmonization error could not produce. See `PLAN.md` §5.3.1b.
+
+**What is still weak.** Only **two** genuinely offset-bearing products have ever been measured,
+so the "present" side of the calibration rests on almost nothing — and one of those two was
+nearly misclassified by an automated rule that read the distribution minimum, defeated by 2
+outlier pixels out of 7.5 million. Eleven of the 48 scenes cannot be decided from pixels at all
+and depend on a metadata field this project has caught lying on 3 of 48. **This remains the part
+of Bhoomi most likely to still be wrong.**
 
 Detection is also expensive and highly variable: about 11 seconds warm, but **492 seconds** has
 been observed on a cold container. It is paid once per scene and then cached, but a first job on
@@ -223,6 +250,7 @@ Reproducibility matters more than the numbers, so here is the provenance of each
 | ΔNDBI by NDVI group; 4.61 : 1 asymmetry | `examples/kolkata_ndbi.py`, 2026-07-30 | not re-run |
 | 7-year recovery: 16.64 % permanent, 1.44 % of AOI | `examples/kolkata_timeseries.py`, 2026-07-30 | not re-run |
 | Baselines available per year | queried live, 2026-07-31 | — |
+| Offset detector: 36 % error rate, 48-scene sample, 0 errors after the fix | measured 2026-07-31; replayed through the shipped code by `probes/verify_offset_rule.py` | **Yes** — the probe runs the shipped resolver, not the analysis script |
 
 The demo pair is `S2A_45QXF_20200310_1_L2A` → `S2B_45QXF_20260304_0_L2A`, both 0.000 % cloud,
 over the New Town / Rajarhat AOI.

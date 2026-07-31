@@ -462,16 +462,25 @@ two the metadata gets wrong.
 
 **Implementation** (`processing/harmonize.py`):
 
-1. `detect_offset_in_scene(band_url)` reads a **decimated overview of the full tile**, not the AOI
-   window. A small AOI of uniformly bright bare soil has no dark pixels either way and would be
-   misread; the 110 km tile reliably contains water or shadow. **How far it decimates turned out
-   to matter as much as the threshold — see §5.3.1.**
-2. Pixels take precedence. Metadata is retained **only as a cross-check that logs on
-   disagreement**, so drift in the provider's conventions stays visible.
+1. `measure_offset_floor_in_scene(band_url)` reads a **decimated overview of the full tile**, not
+   the AOI window. A small AOI of uniformly bright bare soil has no dark pixels either way and
+   would be misread; the 110 km tile has the best chance of containing water or shadow. **How far
+   it decimates turned out to matter as much as the threshold — see §5.3.1.**
+2. `resolve_offset(evidence, properties)` combines them, in this order: a pre-04.00 baseline
+   settles it; otherwise the pixels settle it **if they can**; otherwise metadata decides and the
+   result carries a warning. Pixels take precedence where they speak — metadata has been observed
+   wrong on 3 of 48 measured scenes, and the pixel test catches every one.
 3. Fewer than 10,000 valid sample pixels → **fail**, do not judge the convention from a handful.
+4. Neither conclusive pixels nor a metadata flag → **fail**. Guessing here shifts NDVI by ~0.24
+   while leaving every value in range, which is worse than a visible error.
 
-> **Open check:** `sentinel-2-c1-l2a` exposes no flag at all. The detector works there too, since
-> it reads pixels — but measure before ever using c1-l2a.
+> **The pixel test is one-sided and cannot be made two-sided.** It proves the offset ABSENT or
+> says nothing; `present=True` is only ever reached through metadata. See §5.3.1c — a bright
+> tile with no dark target is genuinely indistinguishable from an offset-bearing one.
+
+> **Open check:** `sentinel-2-c1-l2a` exposes no flag at all. The pixel test works there, but
+> only when it is conclusive — with no flag to fall back on, an inconclusive scene fails outright
+> rather than being guessed. Measure before ever using c1-l2a.
 
 ## 5.3.1 The threshold was calibrated at one sampling density and applied at another
 
@@ -611,6 +620,151 @@ survive that, and neither could the [−1, 1] bound. **The decision is correct f
 tile with ~0.49 pp of margin (§5.3.2), and nothing here speaks to a different tile, a different
 season, or a genuinely offset-bearing product — of which only one has ever been measured.
 
+> **Superseded 2026-07-31 by §5.3.1c.** Widening the sample to 48 scenes across 8 regions showed
+> the dark-fraction statistic does not generalise off tile 45QXF at all. The verification above
+> still holds — it checks the *decision* for that scene, which the replacement rule reaches too —
+> but the detector it was verifying has been replaced.
+
+---
+
+## 5.3.1c The calibration did not generalise, and the statistic was wrong
+
+**Measured 2026-07-31, on the widest sample this project has taken.** §5.3.1b closed by saying a
+wider sample "over more tiles and more of the world would be the honest next step". It was, and
+it invalidated the detector.
+
+**48 scenes: 8 regions × 6 years (2019–2026), baselines 02.11 through 05.12.** Arid tiles — Thar
+Desert, Kutch salt flats — were included deliberately, because the rule counts *dark* pixels and
+a tile with little water or shadow is the obvious way for it to fail.
+
+It failed there, and not marginally:
+
+| decimation | offset-absent scenes | called offset-present — **wrong** | error rate |
+|---|---|---|---|
+| 4 *(shipped)* | 47 | 17 | **36.2 %** |
+| 8 | 47 | 17 | 36.2 % |
+| 16 | 47 | 18 | 38.3 % |
+| 32 | 46 | 21 | 45.7 % |
+
+Decimation 4 is still the best of the four, so §5.3.1's fix was in the right direction. **But the
+decimation was never the real problem.** By region, dark fraction at decimation 4:
+
+| region | min … max over six years | |
+|---|---|---|
+| thar-desert | 0.0057 % … 0.0206 % | **entirely below the 1 % threshold** |
+| delhi-urban | 0.0184 % … 0.3265 % | **entirely below the 1 % threshold** |
+| kutch-saltflat | 0.0466 % … 27.10 % | straddles |
+| kolkata-wetland | 0.1018 % … 3.09 % | straddles |
+| ghats-forest | 0.6066 % … 60.35 % | straddles |
+| sundarbans | 8.10 % … 30.66 % | clear |
+| mumbai-coast | 41.97 % … 60.70 % | clear |
+
+Every Thar and Delhi scene reads below 1 %. All are offset-**absent**. The detector would
+subtract a phantom −1000 from each and shift NDVI by ~0.24, with nothing out of range to reveal
+it — precisely the silent failure §5.3 exists to prevent.
+
+**The statistic was measuring terrain, not the offset.** It worked on 45QXF because Kolkata is
+wet. Ten scenes on one tile could not have shown this; that is the whole lesson.
+
+### The one offset-bearing product, and how it was nearly missed
+
+`chennai-coast 2022-02-04` (`S2A_44PMV_20220204_0_L2A`, baseline 04.00) is the only genuinely
+offset-bearing scene in the sample. The automated ground-truth rule classified it **absent** on a
+distribution minimum of 795 DN — defeated by **2 valid pixels out of 7,535,025**. Its p0.001 is
+already 820 and its p0.1 is 1003.
+
+Confirmed against its own tile, which is the check that settles it:
+
+| | median NDVI |
+|---|---|
+| 2021 peer on 44PMV, offset absent | −0.1511 |
+| target assuming **present** | **−0.1462** |
+| target assuming absent | −0.0201 |
+
+Same tile, six weeks apart in season. The present branch reproduces the peer; the absent branch
+misses by 0.13. So the "present" class still rests on **two** scenes — this and the 2022 scene of
+§5.3 — which remains the weakest part of the evidence.
+
+### The replacement: a one-sided floor test, with metadata only as a fallback
+
+An offset-bearing product cannot hold pixels below ~800 DN, because reflectance cannot sit below
+about −0.02. Test the **0.1st percentile**, not the minimum, so a handful of outliers cannot
+defeat it:
+
+| rule | fires on | wrong when it fires |
+|---|---|---|
+| **floor p0.1 < 800 DN → offset absent** | 37 / 48 | **0** |
+| fallback to metadata for the remaining 11 | 11 / 48 | **0** |
+| metadata *alone*, all 48 | — | **3** |
+
+**The test is one-sided, and this is forced by the data, not a design preference.** A high floor
+is equally consistent with an offset-bearing product and with a bright tile containing no dark
+target. The classes overlap completely up there:
+
+```
+offset ABSENT,  floor >= 800 DN : 922, 942, 983, 1094, 1464, 1777, 1814, 1938, 2045, 2048
+offset PRESENT                  : 1003
+```
+
+1003 sits inside that range. A narrower "just above 800 means present" band fails too — Delhi
+2019 is offset-absent at 1094. **So the pixel test proves ABSENT or says nothing, and
+`present=True` is only ever reached through metadata.**
+
+**The layering is the point.** Metadata alone gets three scenes wrong — Kolkata 2022-03-20, Delhi
+2022-04-19 and Sundarbans 2022-03-22 all carry `boa_offset_applied: false` while their pixels are
+plainly unshifted (floors of 240, 648 and 96 DN). Every one is caught by the pixel test, so the
+flag is never consulted for them. Pixels first; metadata only where pixels are genuinely silent,
+and then **the output carries a warning** (§7.5) rather than swallowing the uncertainty.
+
+The 11 inconclusive scenes are inconclusive for a real reason, not a fixable one: a bright tile
+with no water and no shadow contains no dark target, so the offset **cannot be determined from
+its pixels at all**. Thar at p0.1 ≈ 2000 stays plausible whether or not 1000 is subtracted. That
+case needs metadata plus a warning, not a cleverer threshold.
+
+### Decimation, re-measured for the new statistic
+
+The floor also drifts upward under averaging, so decimation still costs something:
+
+| scene | dec 4 | dec 8 | dec 16 | dec 32 | |
+|---|---|---|---|---|---|
+| chennai 2022-02-04 *(present)* | 1003 | 1010 | 1021 | 1027 | stable |
+| kolkata 2019-04-30 | 698 | 764 | 800 | 846 | **absent → inconclusive** |
+| delhi 2022-04-19 | 648 | 798 | 1031 | 1299 | **absent → inconclusive** |
+| sundarbans 2022-03-22 | 96 | 104 | 114 | 136 | stable |
+| ghats 2022-03-12 | 238 | 252 | 278 | 354 | stable |
+| thar 2022-04-30 | 1938 | 2012 | 2082 | 2175 | stable |
+
+**But the failure mode differs in kind from the old rule.** The floor only ever moves *up*, and
+the pixel test's only positive claim is "absent", so a coarser sample **loses a verdict rather
+than inverting one**. The dark-fraction rule flipped scenes to the opposite answer.
+
+`DEFAULT_DECIMATION` stays **4**, now for a concrete reason: Delhi 2022-04-19 is conclusive at 4
+and 8 but not at 16, and its metadata claims the offset is present when it is not — so at 16 the
+fallback would get that scene wrong.
+
+### The cache now stores the measurement, not the verdict
+
+`scenes.boa_offset_present` cached a *conclusion*, and that is why §5.3.1 cost a full cache purge
+(migration `0003`, cache filename v2): a boolean does not carry the number that produced it, so
+no row could be repaired and every scene had to be re-read over the network.
+
+Migration `0005` replaces it with `boa_floor_dn DOUBLE PRECISION` — the raw p0.1, which does not
+move when a threshold does. The verdict is derived on read. **A future recalibration now costs
+nothing.** The JSON cache goes to v3 for the same reason; note that `bool` is a subclass of `int`
+in Python, so v1/v2 entries are explicitly rejected rather than read as a floor of 0.0 DN, which
+would silently prove every scene offset-absent.
+
+Verified end to end by `probes/verify_offset_rule.py`, which replays all 48 scenes through the
+shipped `resolve_offset`: **0 misclassified, against 17 for the rule it replaces.**
+
+### The lesson
+
+§5.3.1 concluded that "a calibration is only valid for the sampling that produced it". The wider
+sample adds the sharper version: **a calibration is only valid for the population that produced
+it.** Ten scenes on one wet tile produced a statistic that measured how much water a tile
+contains. The arid tiles were added specifically to try to break it, and they did — which is the
+only reason this was found before it reached a user's result rather than after.
+
 ---
 
 ## 5.3.2 Open risk — detection cost can exceed the job timeout
@@ -637,17 +791,25 @@ offset-absent scenes at decimation 4. `S2A_45QXF_20200330_1_L2A` measures **1.49
 that range, still correctly classified, but with about **0.49 pp** of margin against the 1 %
 threshold rather than the 0.93 pp claimed. Nine scenes is not many.
 
-**Not fixed here, because the options trade against each other and one of them is a calibration
-that has already been changed once:**
+> **The margin paragraph above is obsolete (2026-07-31).** §5.3.1c replaced the statistic
+> entirely: the 1 % dark-fraction threshold misclassified 36 % of offset-absent scenes once the
+> sample left tile 45QXF. There is no margin to quote because there is no threshold on that
+> statistic any more. **The cost problem below is unaffected** — it is a property of reading a
+> decimated overview at all, not of which statistic is computed from it.
+
+**Not fixed here, because the options trade against each other:**
 
 | Option | Cost |
 |---|---|
 | Accept and document | A first job on a fresh scene can time out. Recoverable by resubmitting. |
-| Decimation 8 | ~4× less data. Margin drops to ~0.21 pp, which is why 4 was chosen. |
+| Decimation 8 | ~4× less data. Costs conclusiveness on 1 of the 6 scenes re-measured in §5.3.1c; never inverts a verdict. |
 | Detect outside the job | Search is synchronous and user-facing; moving 8 minutes there is worse. |
 | Raise the §8 timeout | Weakens the backstop the timeout exists to be. |
 
-Wants a decision, and more scenes measured before touching the calibration again.
+Wants a decision. **Decimation 8 is a materially safer trade than it was** now that a coarser
+sample degrades to "inconclusive, warn and use metadata" rather than to a wrong answer — but it
+would push Delhi-2022-04-19-like scenes onto a metadata fallback that is wrong for exactly that
+scene, so it is not free.
 
 ---
 
@@ -907,9 +1069,12 @@ CREATE TABLE scenes (
     acquired_at       TIMESTAMPTZ NOT NULL,
     cloud_cover       REAL,
     processing_baseline TEXT,                 -- recorded, but NOT trusted (§5.3)
-    boa_offset_present BOOLEAN,               -- detected from pixels; ~6 s to compute,
+    boa_floor_dn      DOUBLE PRECISION,      -- p0.1 of valid NIR DN; ~11 s to measure,
                                               -- so persist it: it is a property of the
-                                              -- scene, not of the request (§8)
+                                              -- scene, not of the request (§8).
+                                              -- The MEASUREMENT, not the verdict -- so a
+                                              -- recalibration re-derives instead of
+                                              -- purging (§5.3.1c, migration 0005)
     geometry          GEOMETRY(Polygon, 4326) NOT NULL,
     assets            JSONB NOT NULL,         -- band -> href
     properties        JSONB,
@@ -1612,8 +1777,8 @@ What the cache is *for* is January: `POST /jobs` receives `scene_ids` (§7.3) an
 turn them into band hrefs. Verified against live Earth Search — 29 scenes searched, 29 rows
 cached, and `store.get(id)` alone rebuilds a Scene whose `href("nir")` is the real S3 COG URL.
 
-**Two things the upsert protects.** `boa_offset_present` appears in neither the INSERT nor the
-UPDATE column list, so a repeat search cannot overwrite a 6-second pixel measurement (§5.3) with
+**Two things the upsert protects.** `boa_floor_dn` appears in neither the INSERT nor the
+UPDATE column list, so a repeat search cannot overwrite an ~11-second pixel measurement (§5.3) with
 NULL — the one column here that is expensive and not re-derivable from the catalogue. And the
 footprint column being `GEOMETRY(Polygon, 4326)` means a MultiPolygon footprint is skipped with a
 warning rather than aborting the batch it arrived in.

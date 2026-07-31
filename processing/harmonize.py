@@ -17,6 +17,7 @@ reprocessed, so a 2020 acquisition can carry baseline 05.00.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 
 import numpy as np
 
@@ -51,63 +52,113 @@ def parse_baseline(properties: dict) -> float | None:
         return None
 
 
-#: Detector constants. Derived from physics, not fitted to observations: the
-#: offset is exactly 1000 DN and reflectance cannot be meaningfully below about
-#: -0.02 (-200 DN), so a scene carrying the offset has essentially no pixels
-#: below ~800 DN. 700 keeps margin.
-DARK_DN = 700.0
-DARK_MIN_FRACTION = 0.01
+#: The discriminator, and **why it is one-sided**.
+#:
+#: The offset is exactly 1000 DN and surface reflectance cannot be meaningfully
+#: below about -0.02 (-200 DN). So an offset-BEARING product cannot hold valid
+#: pixels below ~800 DN, and a scene whose floor sits below that is certainly
+#: offset-ABSENT.
+#:
+#: The converse does not follow. A high floor is equally consistent with an
+#: offset-bearing product and with a bright scene that simply contains no dark
+#: target -- no water, no shadow, no dense canopy. Measured over 48 scenes
+#: (2026-07-31, `probes/` companion data `outputs/calib_measurements.json`),
+#: the two classes overlap completely in that regime:
+#:
+#:     offset ABSENT, floor at or above 800 DN : 922, 942, 983, 1094, 1464,
+#:                                               1777, 1814, 1938, 2045, 2048
+#:     offset PRESENT                          : 1003
+#:
+#: 1003 sits inside the absent range. No threshold on the floor separates them,
+#: and a narrower "just above 800 means present" band fails too -- Delhi 2019 is
+#: offset-absent with a floor of 1094. So the pixel test PROVES ABSENT or says
+#: nothing, and `present=True` is only ever reached through metadata.
+FLOOR_DN = 800.0
+
+#: Which percentile of the valid distribution counts as "the floor".
+#:
+#: Not the minimum. The offset-present scene in the sample above holds exactly
+#: **2 valid pixels out of 7,535,025** below 800 DN -- its true distribution
+#: starts at 820 -- so a rule reading `min()` classifies it absent on a
+#: rounding-level number of outliers. At the 0.1st percentile the same scene
+#: reads 1003 DN. Ten scenes stand between the highest conclusive absent floor
+#: (698 DN) and the threshold.
+FLOOR_PERCENTILE = 0.1
+
 MIN_SAMPLE_PIXELS = 10_000
 
-#: How far to decimate when sampling the tile, and **the reason the default is
-#: not larger** (measured 2026-07-31, tile 45QXF, nine scenes 2020-2026).
+#: How far to decimate when sampling the tile.
 #:
-#: Overviews are built by *averaging*, which pulls dark pixels up towards their
-#: bright neighbours. The dark tail this detector depends on therefore shrinks
-#: as decimation grows, and the threshold stops separating anything:
+#: Averaging raises the floor, so decimation still costs something. Measured on
+#: real tiles, 2026-07-31, p0.1 in DN:
 #:
-#:     decimation   offset present   offset absent    threshold 1% is
-#:              4          0.000%     1.927-2.955%    below every absent scene   OK
-#:              8          0.000%     1.207-1.982%    0.21 pp of margin          thin
-#:             16          0.000%     0.751-1.442%    INSIDE the absent range    broken
-#:             32          0.000%     0.744-1.422%    INSIDE the absent range    broken
+#:     scene                          dec 4   dec 8  dec 16  dec 32
+#:     chennai 2022-02-04 (PRESENT)    1003    1010    1021    1027
+#:     kolkata 2019-04-30 (absent)      698     764     800     846   <- crosses
+#:     delhi   2022-04-19 (absent)      648     798    1031    1299   <- crosses
+#:     sundarbans 2022-03-22 (absent)    96     104     114     136
+#:     ghats   2022-03-12 (absent)      238     252     278     354
+#:     thar    2022-04-30 (absent)     1938    2012    2082    2175
 #:
-#: The threshold was originally calibrated near full resolution (absent scenes
-#: measured 3.48%-8.17% there) but the function shipped sampling at 32, where
-#: the same scenes measure under 1.5%. Calibrating at one sampling density and
-#: testing at another is what put four of eight offset-absent scenes on the
-#: wrong side of the line, including S2C_45QXF_20260227_0_L2A at 0.976% --
-#: which then produced 93% negative reflectance and a median NDVI of +1.703.
+#: **But the failure mode is different in kind from the rule this replaced.**
+#: The floor only ever moves up, and the pixel test's only positive claim is
+#: "absent", so a coarser sample loses a verdict rather than inverting one. The
+#: dark-fraction rule flipped scenes to the opposite answer; this one falls back
+#: to metadata and says so.
 #:
-#: The cost, measured in the worker container against a warm connection:
-#: decimation 4 is ~11 s, 8 is ~2.2 s, 16 is ~0.6 s. 8 classifies all nine
-#: measured scenes correctly too, but on 0.21 pp of margin against 4's ~0.93 pp.
-#: This is the highest-risk decision in the project -- a misread produces
-#: confidently wrong output rather than a visible failure -- and the cost is
-#: paid once per scene ever into a cache now shared by every worker (PLAN.md 6).
+#: 4 rather than 8 or 16 for a concrete reason: Delhi 2022-04-19 is conclusive
+#: at 4 and 8 but not at 16, and its metadata claims the offset is present when
+#: it is not -- so at 16 the fallback would get that scene wrong. Kolkata
+#: 2019-04-30 is conclusive only at 4. The cost is paid once per scene ever into
+#: a cache shared by every worker (PLAN.md 6), and the cache now stores the
+#: measurement rather than the verdict, so this can be revisited without
+#: re-reading anything.
 #:
-#: **A tenth scene has since widened the absent range downward.**
-#: S2A_45QXF_20200330_1_L2A measures 1.490% at decimation 4, below the
-#: 1.927% lower bound above -- still classified correctly, but on ~0.49 pp of
-#: margin rather than 0.93. Ten scenes on one tile is not a large sample, and
-#: the margin should be treated as roughly half what the table suggests.
-#:
-#: Cold connections are much slower and much noisier, and the tail is worse
-#: than first measured: unwarmed reads at decimation 4 have been seen at 159 s
-#: and, on 2026-07-31, at **492 s** inside a freshly started worker container.
-#: That last one is long enough to blow PLAN.md 8's 10-minute job timeout on
-#: its own, and a two-date change job needs two of them. See PLAN.md 5.3.2 --
-#: this is an open operational risk, not a settled cost.
+#: Cost, measured in the worker container against a warm connection: decimation
+#: 4 is ~11 s, 8 is ~2.2 s, 16 is ~0.6 s. Cold connections are much slower and
+#: much noisier -- unwarmed reads at decimation 4 have been seen at 159 s and,
+#: on 2026-07-31, at **492 s** inside a freshly started worker container. That
+#: is long enough to blow PLAN.md 8's 10-minute job timeout on its own, and a
+#: two-date change job needs two of them. See PLAN.md 5.3.2 -- an open
+#: operational risk, not a settled cost.
 DEFAULT_DECIMATION = 4
 
 
-def detect_offset_in_array(dn: np.ndarray, nodata: float = 0.0) -> bool:
-    """Whether the BOA offset appears present in these pixels.
+@dataclass(frozen=True)
+class OffsetEvidence:
+    """What the pixels alone can say about the reflectance convention.
 
-    Prefer :func:`detect_offset_in_scene`, which samples the whole tile. This
-    variant is only safe on a window known to contain dark targets -- a small
-    AOI of uniformly bright bare soil has no dark pixels either way, and would
-    be misread as offset-bearing.
+    One-sided by construction: see :data:`FLOOR_DN`. ``conclusive`` means the
+    floor proves the offset is ABSENT. It is never evidence that the offset is
+    present.
+    """
+
+    floor_dn: float
+    sample_pixels: int
+
+    @property
+    def conclusive(self) -> bool:
+        """Whether the floor is low enough to prove the offset absent."""
+        return self.floor_dn < FLOOR_DN
+
+
+@dataclass(frozen=True)
+class OffsetDecision:
+    """The resolved convention, and what resolved it."""
+
+    present: bool
+    #: ``"pixels"``, ``"baseline"`` or ``"metadata"``.
+    basis: str
+    evidence: OffsetEvidence | None = None
+    warning: str | None = None
+
+
+def measure_offset_floor(dn: np.ndarray, nodata: float = 0.0) -> OffsetEvidence:
+    """Measure the floor of the valid DN distribution.
+
+    Prefer :func:`measure_offset_floor_in_scene`, which samples the whole tile.
+    A small AOI window is a worse sample for the same reason it always was: it
+    may contain no dark target even when the surrounding tile does.
     """
     valid = dn[dn > nodata]
     if valid.size < MIN_SAMPLE_PIXELS:
@@ -115,36 +166,92 @@ def detect_offset_in_array(dn: np.ndarray, nodata: float = 0.0) -> bool:
             f"Only {valid.size} valid pixels; need {MIN_SAMPLE_PIXELS:,} to judge "
             "the reflectance convention reliably."
         )
-    dark_fraction = float((valid < DARK_DN).mean())
-    present = dark_fraction < DARK_MIN_FRACTION
+    floor = float(np.percentile(valid, FLOOR_PERCENTILE))
+    evidence = OffsetEvidence(floor_dn=floor, sample_pixels=int(valid.size))
 
-    # Logged at every call, not only on disagreement: this number is the whole
-    # decision, and the failure it guards against is one where a wrong answer
-    # still looks like a plausible raster. A value close to the threshold means
-    # the sample was marginal and the result should not be trusted quietly.
-    log = logger.warning if 0.5 <= dark_fraction / DARK_MIN_FRACTION <= 1.5 else logger.info
-    log("offset detection: %.3f%% of %d valid pixels below %.0f DN "
-        "(threshold %.1f%%) -> offset_present=%s",
-        dark_fraction * 100, valid.size, DARK_DN, DARK_MIN_FRACTION * 100, present)
-    return present
+    # Logged at every call. This number is the whole pixel-side decision, and
+    # the failure it guards against is one where a wrong answer still looks
+    # like a plausible raster.
+    logger.info(
+        "offset floor: p%.1f = %.0f DN over %d valid pixels (threshold %.0f) -> %s",
+        FLOOR_PERCENTILE, floor, valid.size, FLOOR_DN,
+        "offset absent" if evidence.conclusive else "inconclusive from pixels")
+    return evidence
 
 
-def detect_offset_in_scene(band_url: str, decimation: int = DEFAULT_DECIMATION) -> bool:
-    """Detect the offset from a decimated overview of the FULL scene.
+def measure_offset_floor_in_scene(
+    band_url: str, decimation: int = DEFAULT_DECIMATION
+) -> OffsetEvidence:
+    """Measure the floor from a decimated overview of the FULL scene.
 
-    Reads across the whole 110 km tile rather than the AOI window, so the
-    sample reliably contains water or shadow -- a small AOI of uniformly bright
-    bare soil has no dark pixels under either convention.
-
-    See DEFAULT_DECIMATION for why the sample is not decimated further: beyond
-    about 8, averaging has erased the dark tail the test measures.
+    Reads across the whole 110 km tile rather than the AOI window, so the sample
+    has the best chance of containing water or shadow.
     """
     import rasterio
 
     with rasterio.open(band_url) as src:
         out = (max(src.height // decimation, 1), max(src.width // decimation, 1))
         data = src.read(1, out_shape=out).astype(np.float32)
-    return detect_offset_in_array(data)
+    return measure_offset_floor(data)
+
+
+def resolve_offset(evidence: OffsetEvidence | None, properties: dict) -> OffsetDecision:
+    """Combine pixel evidence with metadata into a decision.
+
+    The order matters and is not arbitrary:
+
+    1. **A pre-04.00 baseline settles it.** The offset convention did not exist
+       before Processing Baseline 04.00, so such a product cannot carry it.
+    2. **Otherwise the pixels settle it, if they can.** A floor below
+       :data:`FLOOR_DN` proves the offset absent, and this overrides metadata --
+       which is the point. Over the 48-scene sample, ``boa_offset_applied`` was
+       wrong on three scenes (Kolkata 2022-03-20, Delhi 2022-04-19, Sundarbans
+       2022-03-22, all claiming the offset was not applied when the pixels are
+       plainly unshifted). All three have floors of 240, 648 and 96 DN, so the
+       pixel test catches every one and the flag is never consulted for them.
+    3. **Only where the pixels are silent does metadata decide**, and the result
+       carries a warning. This is the bright-arid case: no water, no shadow,
+       nothing dark to shift. Metadata resolved all 11 such scenes in the sample
+       correctly, but it is the field this project has already caught lying, so
+       the uncertainty travels with the output rather than being swallowed.
+    """
+    baseline = parse_baseline(properties)
+
+    if baseline is not None and baseline < OFFSET_BASELINE:
+        return OffsetDecision(present=False, basis="baseline", evidence=evidence)
+
+    if evidence is not None and evidence.conclusive:
+        metadata_says = _metadata_offset_present(properties)
+        if metadata_says is True:
+            logger.warning(
+                "Metadata claims the offset is present for baseline %s (flag=%r) but "
+                "the floor is %.0f DN, which an offset-bearing product cannot reach. "
+                "Trusting the pixels.",
+                properties.get(BASELINE_KEY), properties.get(OFFSET_FLAG),
+                evidence.floor_dn)
+        return OffsetDecision(present=False, basis="pixels", evidence=evidence)
+
+    metadata_says = _metadata_offset_present(properties)
+    if metadata_says is None:
+        raise HarmonizationError(
+            "Cannot determine the reflectance convention: the pixel floor is "
+            f"{'unmeasured' if evidence is None else f'{evidence.floor_dn:.0f} DN, too high to be conclusive'}"
+            f" and {OFFSET_FLAG!r} is absent. Refusing to guess -- a wrong choice "
+            "here shifts NDVI by ~0.24 while leaving every value in range."
+        )
+
+    floor = "unmeasured" if evidence is None else f"{evidence.floor_dn:.0f} DN"
+    warning = (
+        f"The BOA offset could not be determined from pixels: the scene's floor is "
+        f"{floor}, and no valid pixel below {FLOOR_DN:.0f} DN means the tile contains "
+        f"no dark target rather than that the offset is present. Fell back to "
+        f"{OFFSET_FLAG} (offset_present={metadata_says}), a field observed wrong on "
+        f"3 of 48 measured scenes. If this is wrong, every value shifts by ~0.24 and "
+        f"still looks plausible."
+    )
+    logger.warning(warning)
+    return OffsetDecision(present=bool(metadata_says), basis="metadata",
+                          evidence=evidence, warning=warning)
 
 
 def reflectance_params(
@@ -153,7 +260,7 @@ def reflectance_params(
 ) -> tuple[float, float]:
     """Return ``(scale, offset)`` where ``reflectance = DN * scale + offset``.
 
-    ``offset_present`` should come from :func:`detect_offset_in_scene`. It takes
+    ``offset_present`` should come from :func:`resolve_offset`. It takes
     precedence over metadata, because for this collection **no metadata field is
     reliable** (PLAN.md 5.3):
 
@@ -181,12 +288,11 @@ def reflectance_params(
     if metadata_says is None:
         raise HarmonizationError(
             f"Cannot determine reflectance convention: {OFFSET_FLAG!r} absent and no "
-            "pixel evidence supplied. Pass offset_present from "
-            "detect_offset_in_scene()."
+            "pixel evidence supplied. Pass offset_present from resolve_offset()."
         )
     logger.warning(
         "Falling back to metadata for the reflectance convention. This field has "
-        "been observed to be wrong; prefer detect_offset_in_scene()."
+        "been observed to be wrong; prefer resolve_offset()."
     )
     return scale, (BOA_ADD_OFFSET * scale if metadata_says else 0.0)
 

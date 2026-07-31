@@ -45,10 +45,10 @@ def worker_class():
 def _use_postgres_offset_cache() -> None:
     """Point the offset cache at the scenes table, as cache.py anticipated.
 
-    Detecting whether the BOA offset is in a scene's pixels costs ~6 s (PLAN.md
-    8) and is a property of the scene, not of the request. The JSON-file
-    default persists it per container, which means every worker pays it once
-    and a redeploy pays it again. `scenes.boa_offset_present` is shared and
+    Measuring the DN floor a scene's offset decision rests on costs ~11 s
+    (PLAN.md 8) and is a property of the scene, not of the request. The
+    JSON-file default persists it per container, which means every worker pays
+    it once and a redeploy pays it again. `scenes.boa_floor_dn` is shared and
     survives both.
 
     Only when a database is configured; without one the file cache is still
@@ -57,14 +57,14 @@ def _use_postgres_offset_cache() -> None:
     from backend.db import get_engine
 
     if get_engine() is None:
-        logger.info("no database; offset decisions stay in the local file cache")
+        logger.info("no database; offset measurements stay in the local file cache")
         return
 
     import pipeline
     from backend.db.scenes import PostgresOffsetCache
 
     pipeline.set_offset_cache(PostgresOffsetCache())
-    logger.info("offset cache: scenes.boa_offset_present")
+    logger.info("offset cache: scenes.boa_floor_dn")
 
 
 def main() -> int:

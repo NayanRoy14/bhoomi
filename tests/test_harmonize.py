@@ -20,80 +20,167 @@ MISLEADING = {"earthsearch:boa_offset_applied": False, "s2:processing_baseline":
 
 
 def dark_scene(n=50_000):
-    """Pixels including dark targets -- offset absent."""
+    """Pixels including dark targets -- floor well below 800 DN, offset absent."""
     return np.concatenate([np.full(n // 10, 200.0), np.full(n - n // 10, 1800.0)])
 
 
 def bright_scene(n=50_000):
-    """No pixels below 700 DN -- offset present."""
+    """No pixels below 800 DN. Consistent with the offset, and with bare desert."""
     return np.concatenate([np.full(n // 10, 1200.0), np.full(n - n // 10, 2800.0)])
 
 
-class TestPixelDetector:
-    def test_detects_offset_absent(self):
-        assert harmonize.detect_offset_in_array(dark_scene()) is False
+class TestFloorMeasurement:
+    def test_a_low_floor_is_conclusive(self):
+        assert harmonize.measure_offset_floor(dark_scene()).conclusive is True
 
-    def test_detects_offset_present(self):
-        assert harmonize.detect_offset_in_array(bright_scene()) is True
+    def test_a_high_floor_is_not_conclusive(self):
+        """The test is one-sided: a high floor proves nothing either way."""
+        assert harmonize.measure_offset_floor(bright_scene()).conclusive is False
 
     def test_nodata_is_excluded(self):
+        """Zeros are nodata; counting them would floor every scene at 0."""
         data = np.concatenate([np.zeros(20_000), bright_scene()])
-        assert harmonize.detect_offset_in_array(data) is True
+        assert harmonize.measure_offset_floor(data).conclusive is False
 
     def test_too_few_pixels_raises(self):
         """Better to fail than to judge the convention from a handful of pixels."""
         with pytest.raises(HarmonizationError, match="need 10,000"):
-            harmonize.detect_offset_in_array(np.full(500, 1800.0))
+            harmonize.measure_offset_floor(np.full(500, 1800.0))
 
+    def test_a_handful_of_outliers_cannot_flip_the_floor(self):
+        """The real defeat of a min()-based rule, reproduced without network.
 
-class TestSamplingDensity:
-    """The detector is only as good as the sample it is given.
+        `S2A_44PMV_20220204_0_L2A` carries the offset and holds exactly 2 valid
+        pixels out of 7,535,025 below 800 DN. Reading the minimum classifies it
+        offset-absent -- and subtracting nothing shifts its NDVI by 0.13. The
+        0.1st percentile ignores them.
+        """
+        n = 1_000_000
+        data = np.concatenate([np.full(2, 795.0), np.full(n - 2, 1100.0)])
+        assert data.min() < harmonize.FLOOR_DN          # a min() rule is fooled
+        assert harmonize.measure_offset_floor(data).conclusive is False
 
-    Measured 2026-07-31 over tile 45QXF: offset-absent scenes show 1.9%-3.0% of
-    pixels below 700 DN at decimation 4, but only 0.74%-1.44% at 32, because
-    overviews are built by averaging and averaging erases the dark tail. The
-    threshold is 1%, so at 32 the two classes overlap it and four of eight
-    offset-absent scenes were misread as offset-bearing.
-    """
+    def test_averaging_costs_conclusiveness_but_never_correctness(self):
+        """How this statistic degrades under decimation, and why that is safe.
 
-    def test_the_default_decimation_is_low_enough(self):
-        assert harmonize.DEFAULT_DECIMATION <= 8, (
-            "beyond 8, averaging erases the dark tail this detector measures "
-            "and the 1% threshold stops separating the two classes")
+        Averaging raises the floor -- measured on real tiles at decimation 4, 8,
+        16, 32 (2026-07-31): Kolkata 2019-04-30 goes 698 -> 764 -> 800 -> 846,
+        Delhi 2022-04-19 goes 648 -> 798 -> 1031 -> 1299. Both cross the 800 DN
+        line and stop being conclusive.
 
-    def test_averaging_a_dark_tail_away_flips_the_verdict(self):
-        """Reproduces the real failure without network: same scene, coarser look.
-
-        A tile that is 2.5% dark water reads as offset-absent. Average it in
-        blocks -- which is what an overview is -- and the water is diluted below
-        the threshold, so the same pixels now read as offset-bearing.
+        That is a real cost, and it is why DEFAULT_DECIMATION is 4. But it is
+        not the old failure: the floor only ever moves *up*, and the pixel
+        test's only positive claim is "absent", so a coarser look loses a
+        verdict rather than inverting one. The dark-fraction rule it replaced
+        flipped scenes to the opposite answer.
         """
         n = 400_000
         dark = int(n * 0.025)
         full = np.concatenate([np.full(dark, 250.0), np.full(n - dark, 2400.0)])
-        assert harmonize.detect_offset_in_array(full) is False
+        fine = harmonize.measure_offset_floor(full)
+        assert fine.conclusive is True
 
-        # Each output pixel is the mean of 16 inputs; dark pixels are spread
-        # across blocks rather than concentrated, so almost none survive.
+        # Worst case: dark pixels scattered so no block is wholly dark. Real
+        # water is contiguous and degrades far more gently than this.
         blocks = full.copy()
         np.random.default_rng(0).shuffle(blocks)
-        averaged = blocks.reshape(-1, 16).mean(axis=1)
-        assert float((averaged < harmonize.DARK_DN).mean()) < 0.01
-        assert harmonize.detect_offset_in_array(averaged) is True
+        coarse = harmonize.measure_offset_floor(blocks.reshape(-1, 16).mean(axis=1))
 
-    def test_a_marginal_sample_warns(self, caplog):
-        """A fraction near the threshold means the sample could not decide."""
-        n = 100_000
-        dark = int(n * 0.011)          # 1.1%, just above the 1% line
-        data = np.concatenate([np.full(dark, 250.0), np.full(n - dark, 2400.0)])
-        with caplog.at_level("WARNING"):
-            harmonize.detect_offset_in_array(data)
-        assert "offset detection" in caplog.text
+        assert coarse.floor_dn > fine.floor_dn, "averaging must not lower the floor"
+        assert coarse.conclusive is False  # conclusiveness lost, as expected
+        # The verdict is never inverted: an inconclusive floor cannot assert
+        # "present" on its own -- only metadata can, and it is warned about.
+        assert harmonize.resolve_offset(coarse, PRE_OFFSET).present is False
 
-    def test_a_decisive_sample_does_not_warn(self, caplog):
+
+class TestResolveOffset:
+    """Pixels first, metadata only where pixels are silent."""
+
+    def test_pixels_override_metadata_claiming_present(self):
+        """Kolkata 2022-03-20, Delhi 2022-04-19, Sundarbans 2022-03-22.
+
+        All three carry `boa_offset_applied: False` on a post-04.00 baseline --
+        metadata implying the offset is in the pixels -- while their floors sit
+        at 240, 648 and 96 DN, which an offset-bearing product cannot reach.
+        """
+        evidence = harmonize.measure_offset_floor(dark_scene())
+        decision = harmonize.resolve_offset(evidence, RAW_OFFSET)
+        assert decision.present is False
+        assert decision.basis == "pixels"
+        assert decision.warning is None
+
+    def test_overruling_metadata_is_logged(self, caplog):
+        evidence = harmonize.measure_offset_floor(dark_scene())
         with caplog.at_level("WARNING"):
-            harmonize.detect_offset_in_array(dark_scene())   # 10% dark
-        assert "offset detection" not in caplog.text
+            harmonize.resolve_offset(evidence, RAW_OFFSET)
+        assert "Trusting the pixels" in caplog.text
+
+    def test_a_pre_offset_baseline_settles_it_without_pixels(self):
+        """The convention did not exist before 04.00, so nothing to detect."""
+        decision = harmonize.resolve_offset(None, PRE_OFFSET)
+        assert decision.present is False
+        assert decision.basis == "baseline"
+
+    def test_an_inconclusive_floor_falls_back_to_metadata(self):
+        """The bright-arid case: Thar, Kutch, Delhi. No dark target exists."""
+        evidence = harmonize.measure_offset_floor(bright_scene())
+        decision = harmonize.resolve_offset(evidence, RAW_OFFSET)
+        assert decision.present is True
+        assert decision.basis == "metadata"
+
+    def test_the_fallback_carries_a_warning(self):
+        """Uncertainty must travel with the result, not stop at the log."""
+        evidence = harmonize.measure_offset_floor(bright_scene())
+        decision = harmonize.resolve_offset(evidence, RAW_OFFSET)
+        assert decision.warning is not None
+        assert "could not be determined from pixels" in decision.warning
+
+    def test_corrected_metadata_with_an_inconclusive_floor_means_absent(self):
+        evidence = harmonize.measure_offset_floor(bright_scene())
+        decision = harmonize.resolve_offset(evidence, CORRECTED)
+        assert decision.present is False
+        assert decision.basis == "metadata"
+
+    def test_no_pixels_and_no_metadata_raises(self):
+        """Guessing here is worse than failing -- the error stays invisible."""
+        with pytest.raises(HarmonizationError, match="Refusing to guess"):
+            harmonize.resolve_offset(None, {"s2:processing_baseline": "05.12"})
+
+    def test_an_inconclusive_floor_and_no_metadata_raises(self):
+        evidence = harmonize.measure_offset_floor(bright_scene())
+        with pytest.raises(HarmonizationError, match="too high to be conclusive"):
+            harmonize.resolve_offset(evidence, {"s2:processing_baseline": "05.12"})
+
+
+class TestOneSidedness:
+    """The property the 48-scene sample forced, and the reason for it.
+
+    Offset-absent scenes measured floors of 922, 942, 983, 1094, 1464, 1777,
+    1814, 1938, 2045 and 2048 DN. The one offset-present scene measured 1003 --
+    inside that range. No threshold on a high floor separates the classes, so
+    the pixel test must never claim "present".
+    """
+
+    ABSENT_FLOORS_ABOVE_THRESHOLD = [922, 942, 983, 1094, 1464, 1777, 1814,
+                                     1938, 2045, 2048]
+    PRESENT_FLOOR = 1003
+
+    def test_the_present_scene_is_bracketed_by_absent_ones(self):
+        below = [f for f in self.ABSENT_FLOORS_ABOVE_THRESHOLD if f < self.PRESENT_FLOOR]
+        above = [f for f in self.ABSENT_FLOORS_ABOVE_THRESHOLD if f > self.PRESENT_FLOOR]
+        assert below and above, (
+            "if this ever separates, the pixel test could claim 'present' -- "
+            "re-derive the rule rather than assuming it still cannot")
+
+    def test_no_measured_absent_scene_is_ever_called_present(self):
+        """The whole guarantee: a conclusive floor is never wrong."""
+        for floor in (1, 20, 96, 138, 240, 357, 648, 698):
+            evidence = harmonize.OffsetEvidence(floor_dn=float(floor), sample_pixels=10**6)
+            assert harmonize.resolve_offset(evidence, RAW_OFFSET).present is False
+
+    def test_the_threshold_leaves_room_below_it(self):
+        """698 DN is the highest conclusive absent floor measured; 800 is the line."""
+        assert harmonize.FLOOR_DN - 698 >= 100
 
 
 class TestReflectanceParams:
@@ -119,7 +206,7 @@ class TestReflectanceParams:
         assert "observed to be wrong" in caplog.text
 
     def test_no_evidence_at_all_raises(self):
-        with pytest.raises(HarmonizationError, match="detect_offset_in_scene"):
+        with pytest.raises(HarmonizationError, match="resolve_offset"):
             reflectance_params({"s2:processing_baseline": "05.12"})
 
     def test_acquisition_date_is_never_consulted(self):

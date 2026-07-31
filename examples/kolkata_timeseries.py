@@ -37,10 +37,12 @@ for y in YEARS:
     p = props[str(y)]
     nir_dn, red_dn, scl = z[f"{y}_nir"], z[f"{y}_red"], z[f"{y}_scl"]
 
-    # Determine the convention from the pixels. In production this uses
-    # detect_offset_in_scene() against a full-tile overview; the cached AOI is
-    # known to contain water and shadow, so the array form is safe here.
-    present = harmonize.detect_offset_in_array(nir_dn.astype(np.float32))
+    # Determine the convention from the pixels. In production this measures a
+    # full-tile overview; the cached AOI is known to contain water and shadow,
+    # so the array form is safe here.
+    evidence = harmonize.measure_offset_floor(nir_dn.astype(np.float32))
+    decision = harmonize.resolve_offset(evidence, p)
+    present = decision.present
 
     invalid = masking.scl_mask(scl) | (nir_dn == 0) | (red_dn == 0)
     nir = apply_mask(harmonize.to_reflectance(nir_dn, p, present), invalid)
@@ -49,7 +51,7 @@ for y in YEARS:
 
     flag = str(p.get("earthsearch:boa_offset_applied"))
     meta = harmonize._metadata_offset_present(p)
-    src = "pixels" if meta == present else "PIXELS*"
+    src = decision.basis if meta == present else f"{decision.basis}*"
     print(f"{y}  {p['datetime'][:10]}  {p['s2:processing_baseline']:>8}  {flag:>5}"
           f"{str(present):>9}  {src:>7}   {np.nanmedian(series[y]):.3f}")
 print("  * metadata disagreed and was overruled")

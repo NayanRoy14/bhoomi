@@ -231,14 +231,14 @@ class TestUpsert:
         assert store.get(scene().id).cloud_cover == pytest.approx(1.5)
 
     def test_a_repeat_search_does_not_erase_the_offset_measurement(self, store, db):
-        """The value this whole table exists to protect: 6 s to derive."""
+        """The value this whole table exists to protect: ~11 s to derive."""
         offsets = db_scenes.PostgresOffsetCache(engine=db)
         store.put_many([scene()])
-        offsets.set(scene().id, True)
+        offsets.set(scene().id, 1003.0)
 
         store.put_many([scene(cloud=9.9)])          # the user searches again
 
-        assert offsets.get(scene().id) is True
+        assert offsets.get(scene().id) == 1003.0
 
 
 @needs_db
@@ -247,20 +247,32 @@ class TestOffsetCache:
         offsets = db_scenes.PostgresOffsetCache(engine=db)
         store.put_many([scene()])
         assert offsets.get(scene().id) is None      # stored, never measured
-        offsets.set(scene().id, True)
-        assert offsets.get(scene().id) is True
+        offsets.set(scene().id, 698.0)
+        assert offsets.get(scene().id) == 698.0
 
-    def test_false_is_not_confused_with_missing(self, store, db):
-        """The 2025 case: pixels say no offset. Distinct from 'not measured'."""
+    def test_a_zero_floor_is_not_confused_with_missing(self, store, db):
+        """0.0 DN and NULL mean different things, and 0.0 is falsy.
+
+        A missing measurement read as 0.0 would be a floor below every
+        threshold, silently asserting 'offset absent' for the scene.
+        """
         offsets = db_scenes.PostgresOffsetCache(engine=db)
         store.put_many([scene()])
-        offsets.set(scene().id, False)
-        assert offsets.get(scene().id) is False
+        offsets.set(scene().id, 0.0)
+        assert offsets.get(scene().id) == 0.0
+        assert offsets.get("S2A_NEVER_MEASURED_L2A") is None
+
+    def test_the_floor_survives_a_round_trip_undistorted(self, store, db):
+        """It is a percentile, not a pixel value -- DOUBLE PRECISION, not INTEGER."""
+        offsets = db_scenes.PostgresOffsetCache(engine=db)
+        store.put_many([scene()])
+        offsets.set(scene().id, 1996.875)
+        assert offsets.get(scene().id) == pytest.approx(1996.875)
 
     def test_setting_an_uncached_scene_is_a_no_op_not_an_error(self, db, store):
-        """It cannot insert -- a (id, bool) pair has no footprint. Costs 6 s later."""
+        """It cannot insert -- an (id, float) pair has no footprint."""
         offsets = db_scenes.PostgresOffsetCache(engine=db)
-        offsets.set("S2A_NEVER_SEARCHED_L2A", True)
+        offsets.set("S2A_NEVER_SEARCHED_L2A", 250.0)
         assert offsets.get("S2A_NEVER_SEARCHED_L2A") is None
 
     def test_it_satisfies_the_offset_cache_protocol(self, db):

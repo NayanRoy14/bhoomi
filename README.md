@@ -199,7 +199,7 @@ backend/      FastAPI -- HTTP and nothing else
   storage.py      where finished COGs live -- local disk, or any S3-compatible store
   tiles.py        TiTiler URL shape and the colour ramp per index
   resolve.py      scene id -> Scene, cache first, catalogue second
-cache.py      per-scene BOA-offset decisions -- JSON file, or the scenes table
+cache.py      per-scene measured DN floor -- JSON file, or the scenes table
 frontend/     Next.js + MapLibre -- AOI drawing, scene browsing, analysis
 catalogue/    STAC client -- no web framework, testable without a server
   base.py         Scene, SearchQuery, Catalogue protocol
@@ -244,14 +244,27 @@ offset-absent scenes measure 0.74–1.42 %, straddling the 1 % threshold; four o
 the wrong side. One of them missed by 0.024 of a percentage point, and subtracting an offset that
 was not there produced 93 % negative reflectance and a median NDVI of +1.703.
 
-Two things are worth taking from that. A calibration is only valid for the sampling that produced
-it — the threshold, the statistic and the sample density are one instrument, and `decimation` was
-sitting in a function signature looking like an implementation detail. And the guard is what
-caught it: `normalized_difference` **raises** rather than logs when values leave [−1, 1], which is
-the only reason this surfaced as a failed job rather than a plausible-looking raster with a
-systematic bias.
+**Then the fixed version turned out to be measuring the wrong thing entirely.** Widening the
+sample from ten scenes on one tile to 48 scenes across 8 regions — deliberately including desert
+and salt flat, where dark pixels barely exist — showed the rule misclassifying **36 % of
+offset-absent scenes**. Every Thar Desert and Delhi scene reads below the 1 % threshold, not
+because they carry the offset but because those tiles contain almost no dark ground. The
+statistic was measuring terrain. It worked on Kolkata because Kolkata is wet.
 
-See [`PLAN.md`](PLAN.md) §5.3 and §5.3.1.
+What replaced it is **one-sided**, which is the honest shape for this problem: a floor below
+800 DN *proves* the offset absent, while a high floor proves nothing, because a bright desert
+tile and an offset-bearing scene are genuinely indistinguishable from pixels. Where the pixels
+cannot decide, the decision falls back to metadata and **the output carries a warning saying so**.
+Across the 48 scenes: 0 misclassified, against 17 for the rule it replaces.
+
+Three things are worth taking from that. A calibration is only valid for the sampling that
+produced it — and, more sharply, **for the population that produced it**. Some questions are not
+answerable from the data you have, and a detector that says "I don't know" is worth more than one
+that always answers. And the guard is what caught the first failure: `normalized_difference`
+**raises** rather than logs when values leave [−1, 1], which is the only reason it surfaced as a
+failed job rather than a plausible-looking raster with a systematic bias.
+
+See [`PLAN.md`](PLAN.md) §5.3, §5.3.1 and §5.3.1c.
 
 ## Licence and attribution
 
