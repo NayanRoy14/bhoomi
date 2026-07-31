@@ -61,6 +61,10 @@ Next.js + MapLibre  ->  FastAPI  ->  Redis + RQ  ->  Python worker
 Raster work never happens inside an HTTP request. Jobs are queued, and the same queue is what
 makes an OGC API – Processes async execution model natural rather than bolted on.
 
+[**`docs/architecture.md`**](docs/architecture.md) has the rest: the dependency rule and why it is
+worth the discipline, the request lifecycle, the job state machine, what happens inside a job, and
+the decisions that shaped each — as diagrams that render here and diff like text.
+
 ## Which standards?
 
 - **STAC** — catalogue search (Element84 Earth Search, `sentinel-2-l2a`)

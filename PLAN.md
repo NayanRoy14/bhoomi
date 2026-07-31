@@ -2270,7 +2270,11 @@ and the same result is reproducible from a 15-line Python script hitting `/ogc`.
 **Data:** Bhoonidhi integration if O6 resolved by 2027-01-15; otherwise the §2.3 fallback,
 documented honestly rather than quietly dropped.
 
-**Documentation:** README answering the six questions in §15 · architecture diagram · API docs
+**Documentation:** README answering the six questions in §15 · ~~architecture diagram~~
+✅ [`docs/architecture.md`](docs/architecture.md), 2026-07-31 — five Mermaid diagrams, so they
+render on GitHub and show up in a diff rather than going stale as a PNG nobody regenerates. Every
+claim checked against the code: the dependency table is measured from real imports, and the state
+machine was corrected after `allowed_transitions` disagreed with the first draft · API docs
 (FastAPI's OpenAPI plus prose) · `docs/processing.md` explaining the science · installation
 from clean clone · `docs/limitations.md` — every known weakness, stated plainly.
 
