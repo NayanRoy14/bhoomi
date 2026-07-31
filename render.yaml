@@ -106,7 +106,14 @@ services:
         value: INFO
 
   # ---------------------------------------------------------- frontend
-  - name: bhoomi
+  #
+  # Named `bhoomi-site` rather than `bhoomi` because the hostname follows the
+  # name, and the shorter one was already taken globally on onrender.com -- the
+  # first deploy of this blueprint came up as `bhoomi-8t7g.onrender.com`.
+  # A service's name here is the single source of truth for it: Render disables
+  # the rename field in the dashboard for blueprint-managed services, so this
+  # line is the only place it can be changed.
+  - name: bhoomi-site
     type: web
     runtime: static
     rootDir: ./frontend

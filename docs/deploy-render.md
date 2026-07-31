@@ -127,7 +127,7 @@ python examples/ogc_client.py --base $API
 If that writes a `.tif`, everything works: API, queue, worker, migrations and
 all. Expect it to pause on the first request while the service wakes.
 
-Open `https://bhoomi.onrender.com`, draw an area over Kolkata, search, pick a
+Open the static site (its URL is on its own service page), draw an area over Kolkata, search, pick a
 scene, run NDVI. There will be no map preview — that is the missing tile
 server, not a failure — and the download link gives you the GeoTIFF.
 
