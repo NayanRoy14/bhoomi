@@ -2274,7 +2274,11 @@ documented honestly rather than quietly dropped.
 ✅ [`docs/architecture.md`](docs/architecture.md), 2026-07-31 — five Mermaid diagrams, so they
 render on GitHub and show up in a diff rather than going stale as a PNG nobody regenerates. Every
 claim checked against the code: the dependency table is measured from real imports, and the state
-machine was corrected after `allowed_transitions` disagreed with the first draft · API docs
+machine was corrected after `allowed_transitions` disagreed with the first draft ·
+~~API docs (FastAPI's OpenAPI plus prose)~~ ✅ [`docs/api.md`](docs/api.md), 2026-07-31 — the prose
+half; `/docs` remains the generated half. Every request and response in it was captured from a
+running stack rather than written from memory, and a check confirms every routed endpoint is
+documented and every documented endpoint is routed
 (FastAPI's OpenAPI plus prose) · `docs/processing.md` explaining the science · installation
 from clean clone · `docs/limitations.md` — every known weakness, stated plainly.
 
