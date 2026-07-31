@@ -28,9 +28,19 @@ class ChangeStats:
 
     ``mean`` alone is misleading when change is concentrated in a minority of
     pixels: the demo AOI has a mean NDVI shift of only -0.027 while 9.73% of
-    pixels lost more than 0.2. The loss/gain asymmetry is the honest headline --
-    noise moves both directions roughly equally, so a lopsided ratio is evidence
-    of real change rather than drift.
+    pixels lost more than 0.2. So the loss/gain fractions are reported beside
+    it, and their ratio with them.
+
+    **What that ratio does and does not say** (narrowed 2026-07-31). It was
+    written on the argument that noise moves both directions roughly equally,
+    making a lopsided ratio evidence of real change. Measuring the demo raster
+    showed the gain is *not* noise: it is spatially clustered 18x more than
+    chance, more so than the loss at 7x. Both directions are real signal --
+    the gain presumably cropping cycles, water and regrowth.
+
+    So a ratio near 1.0 does not establish "this is noise", and a ratio well
+    above 1 does not establish "the gain is measurement error". It says the
+    plainer thing: more of the area moved down than up. See PLAN.md 5.4.4.
     """
 
     mean: float
@@ -43,7 +53,12 @@ class ChangeStats:
 
     @property
     def asymmetry(self) -> float:
-        """Loss:gain ratio. ~1.0 suggests noise; markedly above 1 suggests real loss."""
+        """Loss:gain ratio -- how one-sided the change is, and nothing more.
+
+        Not a noise test. The demo raster's gain is spatially structured, so a
+        ratio near 1.0 would mean "up and down in equal measure", not "this is
+        all noise". See the class docstring.
+        """
         if self.gain_fraction <= 0.0:
             return float("inf") if self.loss_fraction > 0 else 1.0
         return self.loss_fraction / self.gain_fraction

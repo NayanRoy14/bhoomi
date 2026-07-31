@@ -117,7 +117,7 @@ Outputs go to local disk by default and to object storage when `BHOOMI_S3_BUCKET
 `cog_uri` is a URL either way. On local disk the worker and the API must share a filesystem;
 object storage removes that constraint.
 
-345 tests. 70 of them need Postgres, Redis or an S3-compatible store, and skip without:
+345 tests. 74 of them need Postgres, Redis or an S3-compatible store, and skip without:
 
 ```bash
 docker run -d --rm --name bhoomi-test-pg -p 55432:5432 \
@@ -210,7 +210,7 @@ processing/   pure raster library -- no web dependencies, importable from a note
   cog.py          COG writing, validation, provenance tags
 examples/     worked analyses over Kolkata
 probes/       measurement scripts -- every empirical claim in PLAN.md is re-runnable
-tests/        345 tests; 70 need Postgres, Redis or S3, the rest need nothing
+tests/        345 tests; 74 need Postgres, Redis or S3, the rest need nothing
 docs/         data-source notes and the Bhoonidhi access request
 PLAN.md       the full project plan, with a live decisions register
 ```

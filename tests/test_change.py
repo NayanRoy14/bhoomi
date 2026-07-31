@@ -48,15 +48,18 @@ class TestDifference:
 
 
 class TestChangeStats:
-    def test_asymmetry_detects_one_sided_loss(self):
-        """Noise moves both ways; real loss is lopsided (PLAN.md 5.4.4)."""
+    def test_asymmetry_measures_one_sidedness(self):
+        """How lopsided the change is -- not a noise test. See ChangeStats."""
         diff = np.concatenate([np.full(30, -0.5), np.full(10, 0.5), np.zeros(60)])
         stats = change.change_stats(diff.astype(np.float32))
         assert stats.loss_fraction == pytest.approx(0.30)
         assert stats.gain_fraction == pytest.approx(0.10)
         assert stats.asymmetry == pytest.approx(3.0)
 
-    def test_symmetric_noise_gives_asymmetry_near_one(self):
+    def test_a_symmetric_distribution_gives_asymmetry_near_one(self):
+        """Equal movement up and down. That is what the number reports; whether
+        such a distribution is noise or two balanced real signals is not
+        something the ratio can tell you (PLAN.md 5.4.4, narrowed 2026-07-31)."""
         rng = np.random.default_rng(0)
         stats = change.change_stats(rng.normal(0, 0.3, 100_000).astype(np.float32))
         assert 0.9 < stats.asymmetry < 1.1

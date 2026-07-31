@@ -659,6 +659,14 @@ Calibration drift or noise would move both directions roughly equally. Dense veg
 (NDVI > 0.6) nearly halved, 15.75 % → 8.53 %. Water held steady at 9.36 % → 9.26 %, which is a
 useful control: a global processing artifact would have shifted the wetlands too, and it did not.
 
+> **Narrowed 2026-07-31.** The sentence above — "calibration drift or noise would move both
+> directions roughly equally" — no longer carries the weight it was given. Measuring the spatial
+> structure of *both* masks showed the gain is **18× more clustered than chance**, against the
+> loss at 7×. Spatially organised movement is not noise, so the 3:1 compares two real signals of
+> different size rather than signal against noise. **The conclusion survives; this particular
+> route to it does not.** What still supports it: the water control in the same sentence, and the
+> geometry described below. See the run record later in this document.
+
 **Rules this imposes:**
 1. The flagship demo reports **NDVI change**, never SCL class counts.
 2. If the UI ever shows SCL statistics, it must state the baselines and warn on mismatch.
