@@ -1,8 +1,14 @@
 # Bhoonidhi API access request — draft
 
-**Status:** draft, not sent. Review, fill the bracketed fields, send from
-roynayanroy14@gmail.com (or the institutional address if you have one — a college
-domain reads better for a research request).
+**Status:** draft, not sent. Review, fill the bracketed fields, and send from the address
+your Bhoonidhi account is registered under — or an institutional one if you have it, since a
+college domain reads better for a research request.
+
+> **Contact details are redacted here on purpose.** This file is in a public repository and a
+> plain-text address in one is a spam magnet, so the email and the Bhoonidhi username live in
+> your local copy rather than in git. Everything else is verbatim: the point of keeping this
+> file is the four questions and the reasoning behind them, which is what anyone else hitting
+> NRSC's whitelisting requirement actually needs.
 
 **To:** bhoonidhi@nrsc.gov.in
 **Subject:** Query regarding programmatic / API access to Bhoonidhi open data — student research project
@@ -13,7 +19,7 @@ Respected Sir/Madam,
 
 I am Nayan Roy, a BTech Information Technology student at Guru Nanak Institute of
 Technology, Kolkata (graduating 2028). I am a registered Bhoonidhi user
-(username: nayanroy, registered under this email address).
+(username: [BHOONIDHI_USERNAME], registered under this email address).
 
 I am developing an open-source, non-commercial research prototype called **Bhoomi** — a
 server-side Earth Observation processing platform. It allows a user to define an area of
@@ -54,7 +60,7 @@ With regards,
 
 Nayan Roy
 BTech Information Technology, Guru Nanak Institute of Technology, Kolkata
-Email: roynayanroy14@gmail.com
+Email: [YOUR_EMAIL]
 Phone: [____________]
 GitHub: https://github.com/NayanRoy14
 
@@ -62,8 +68,9 @@ GitHub: https://github.com/NayanRoy14
 
 ## Notes before sending
 
-- **Send it from roynayanroy14@gmail.com** — the address the Bhoonidhi account is registered
-  under. Username `nayanroy` is stated in the opening line.
+- **Send it from the address the Bhoonidhi account is registered under**, and put that same
+  username in the opening line where `[BHOONIDHI_USERNAME]` sits. The two must match or the
+  account cannot be identified.
 - **Add a phone number** — the one remaining blank. Indian government correspondence often
   comes back by phone rather than email.
 - Question 2 is the one most likely to unblock you quickly. Even a "no API, but here is how
