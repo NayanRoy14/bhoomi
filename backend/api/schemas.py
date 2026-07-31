@@ -153,6 +153,10 @@ class OutputOut(BaseModel):
     expires_at: datetime | None = None
     #: Populated once TiTiler is wired up (PLAN.md 11, January).
     tiles: str | None = None
+    #: How to read this result: cloud left unmasked, baselines mixed. Empty is
+    #: the normal case. A warning that reaches only the logs is not a warning,
+    #: which is why these are served rather than merely recorded.
+    warnings: list[str] = Field(default_factory=list)
 
 
 class JobResultResponse(BaseModel):

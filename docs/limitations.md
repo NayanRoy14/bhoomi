@@ -168,15 +168,24 @@ was calibrated at one sampling density and applied at another, misclassifying fo
 scenes tested. See `PLAN.md` §5.3.1. **This is the part of Bhoomi most likely to still be
 wrong.**
 
+The current calibration rests on **ten scenes over one tile**, and the tenth sat below the range
+the other nine established — correctly classified, but on about half the margin. A wider sample,
+over more tiles and more of the world, would be the honest next step.
+
+Detection is also expensive and highly variable: about 11 seconds warm, but **492 seconds** has
+been observed on a cold container. It is paid once per scene and then cached, but a first job on
+two uncached scenes can exceed the 10-minute limit and be stopped. Resubmitting works. See
+`PLAN.md` §5.3.2 — this is a known, unresolved operational risk.
+
 ### Cloud masking depends on a band that is not always there
 
 Masking uses SCL. A scene without an SCL band is processed **unmasked**, and the result carries a
 warning saying so. The valid-pixel fraction is recorded on every output — a result that is 80 %
 cloud says so rather than rendering as a mostly-empty raster.
 
-> **Known gap.** That warning currently reaches the logs and the GeoTIFF's tags, but is not
-> returned by the API, so a user of the web interface does not see it. Closing this needs a
-> column in the `outputs` table.
+Warnings travel with the result: they are stored on the output row, returned by the API, and
+shown above the statistics in the web interface — above, because they change how the numbers
+should be read, and reading them second is too late.
 
 ---
 

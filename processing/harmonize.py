@@ -85,12 +85,19 @@ MIN_SAMPLE_PIXELS = 10_000
 #: This is the highest-risk decision in the project -- a misread produces
 #: confidently wrong output rather than a visible failure -- and the cost is
 #: paid once per scene ever into a cache now shared by every worker (PLAN.md 6).
-#: Nine seconds, once, is worth twice the margin.
 #:
-#: Cold connections are much slower and much noisier: an unwarmed read at 4 has
-#: been seen at 159 s, and a first job at 65 s end to end. That is network
-#: variance, not the steady state, but it is why the first job after a
-#: container starts feels slow.
+#: **A tenth scene has since widened the absent range downward.**
+#: S2A_45QXF_20200330_1_L2A measures 1.490% at decimation 4, below the
+#: 1.927% lower bound above -- still classified correctly, but on ~0.49 pp of
+#: margin rather than 0.93. Ten scenes on one tile is not a large sample, and
+#: the margin should be treated as roughly half what the table suggests.
+#:
+#: Cold connections are much slower and much noisier, and the tail is worse
+#: than first measured: unwarmed reads at decimation 4 have been seen at 159 s
+#: and, on 2026-07-31, at **492 s** inside a freshly started worker container.
+#: That last one is long enough to blow PLAN.md 8's 10-minute job timeout on
+#: its own, and a two-date change job needs two of them. See PLAN.md 5.3.2 --
+#: this is an open operational risk, not a settled cost.
 DEFAULT_DECIMATION = 4
 
 

@@ -396,6 +396,18 @@ function Result({
     <div className="result">
       <h3>Result</h3>
 
+      {output.warnings.length > 0 && (
+        <div className="result-warnings">
+          {/* Shown above the numbers, not below: these change how the numbers
+              should be read, so reading them second is too late. */}
+          {output.warnings.map((w) => (
+            <p key={w} className="warn small">
+              {w}
+            </p>
+          ))}
+        </div>
+      )}
+
       {output.tiles && (
         <Legend process={process} opacity={opacity} onOpacity={onOpacity} />
       )}

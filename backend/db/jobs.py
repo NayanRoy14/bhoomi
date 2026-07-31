@@ -150,6 +150,9 @@ class Output:
     valid_fraction: float | None = None
     stats: dict | None = None
     expires_at: datetime | None = None
+    #: How this result should be read -- unmasked cloud, baseline mismatch.
+    #: Served by 7.5, because a warning nobody sees is not a warning.
+    warnings: list[str] = field(default_factory=list)
 
 
 _INSERT = text("""
@@ -366,29 +369,33 @@ class JobStore:
     def add_output(self, job_id, output_type: str, cog_uri: str, bounds: dict,
                    crs: str, resolution_m: float, size_bytes: int | None = None,
                    valid_fraction: float | None = None, stats: dict | None = None,
-                   expires_at: datetime | None = None) -> uuid.UUID:
+                   expires_at: datetime | None = None,
+                   warnings: list[str] | None = None) -> uuid.UUID:
         with self.engine.begin() as conn:
             return conn.execute(text("""
                 INSERT INTO outputs (job_id, output_type, cog_uri, bounds, crs,
                                      resolution_m, size_bytes, valid_fraction,
-                                     stats, expires_at)
+                                     stats, expires_at, warnings)
                 VALUES (:job_id, :output_type, :cog_uri,
                         ST_SetSRID(ST_GeomFromGeoJSON(:bounds), 4326),
                         :crs, :resolution_m, :size_bytes, :valid_fraction,
-                        CAST(:stats AS JSONB), :expires_at)
+                        CAST(:stats AS JSONB), :expires_at,
+                        CAST(:warnings AS TEXT[]))
                 RETURNING id
             """), {"job_id": str(job_id), "output_type": output_type,
                    "cog_uri": cog_uri, "bounds": json.dumps(bounds), "crs": crs,
                    "resolution_m": resolution_m, "size_bytes": size_bytes,
                    "valid_fraction": valid_fraction,
                    "stats": json.dumps(stats) if stats is not None else None,
-                   "expires_at": expires_at}).scalar_one()
+                   "expires_at": expires_at,
+                   "warnings": list(warnings or [])}).scalar_one()
 
     def outputs_for(self, job_id) -> list[Output]:
         with self.engine.connect() as conn:
             rows = conn.execute(text("""
                 SELECT id, job_id, output_type, cog_uri, ST_AsGeoJSON(bounds) AS bounds,
-                       crs, resolution_m, size_bytes, valid_fraction, stats, expires_at
+                       crs, resolution_m, size_bytes, valid_fraction, stats,
+                       expires_at, warnings
                 FROM outputs WHERE job_id = :job_id ORDER BY created_at
             """), {"job_id": str(job_id)}).all()
         return [
@@ -400,6 +407,7 @@ class JobStore:
                 size_bytes=r._mapping["size_bytes"],
                 valid_fraction=r._mapping["valid_fraction"],
                 stats=r._mapping["stats"], expires_at=r._mapping["expires_at"],
+                warnings=list(r._mapping["warnings"] or []),
             )
             for r in rows
         ]

@@ -232,13 +232,23 @@ class TestMaskingAndFailure:
 
     def test_a_scene_without_scl_still_runs_but_warns(self, wired, job, scene,
                                                      monkeypatch):
-        """5.2 wants masking always; an unmasked result must announce itself."""
+        """5.2 wants masking always; an unmasked result must announce itself.
+
+        This warning is the reason `outputs.warnings` exists: it reached the
+        log and the GeoTIFF tags but not the API, so a browser user got an
+        unmasked raster with nothing on screen to say so.
+        """
         stripped = {k: v for k, v in scene.assets.items() if k != "scl"}
         import dataclasses
         monkeypatch.setattr(processes, "resolve_scene",
                             lambda _id: dataclasses.replace(scene, assets=stripped))
         (output,) = processes.get("ndvi").run(Recorder(), job)
         assert any("NOT masked" in w for w in output.warnings)
+
+    def test_a_masked_scene_produces_no_warnings(self, wired, job):
+        """The normal case is silence -- a warning shown always is ignored."""
+        (output,) = processes.get("ndvi").run(Recorder(), job)
+        assert output.warnings == []
 
     def test_an_aoi_outside_the_scene_is_refused(self, wired, job, monkeypatch):
         """D3, enforced again in the worker -- the API check can be bypassed by

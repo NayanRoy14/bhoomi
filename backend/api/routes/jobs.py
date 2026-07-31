@@ -202,6 +202,7 @@ def job_result(job_id: str, jobs: JobStore = Depends(get_job_store)
                 resolution_m=o.resolution_m, valid_fraction=o.valid_fraction,
                 stats=o.stats, expires_at=o.expires_at,
                 tiles=tiles.tiles_url(job.process, source),
+                warnings=o.warnings,
             )
             for o in outputs
         ],

@@ -126,6 +126,8 @@ export interface Output {
   expires_at: string | null;
   /** Null until TiTiler is wired up; better absent than a URL that 404s. */
   tiles: string | null;
+  /** How to read this result -- unmasked cloud, mixed baselines. Usually empty. */
+  warnings: string[];
 }
 
 export interface JobResult {

@@ -511,3 +511,19 @@ a.primary.block:hover {
 .legend .opacity input[type="range"] {
   margin-top: 4px;
 }
+
+.result-warnings {
+  margin-bottom: 12px;
+  padding: 10px 12px;
+  background: rgba(245, 158, 11, 0.08);
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  border-radius: 6px;
+}
+
+.result-warnings p {
+  margin: 0;
+}
+
+.result-warnings p + p {
+  margin-top: 8px;
+}

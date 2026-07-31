@@ -96,7 +96,7 @@ def run_job(job_id: str) -> str:
             bounds=output.bounds, crs=output.crs,
             resolution_m=output.resolution_m, size_bytes=output.size_bytes,
             valid_fraction=output.valid_fraction, stats=output.stats,
-            expires_at=output.expires_at,
+            expires_at=output.expires_at, warnings=output.warnings,
         )
 
     store.advance(job_id, JobStatus.COMPLETED)

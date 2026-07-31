@@ -577,6 +577,49 @@ let that make the code lazy — a user drawing an AOI over a `_0_` scene still n
 and assert the resulting NDVIs match within 1e-6. Add a third case with both properties absent
 and assert it raises rather than silently defaulting.
 
+## 5.3.2 Open risk — detection cost can exceed the job timeout
+
+**Measured 2026-07-31, and not yet resolved.** §5.3.1 set `DEFAULT_DECIMATION = 4` and recorded
+its cost as ~11 s warm, ~159 s on an unwarmed read. The tail is worse than that. On a freshly
+started worker container, a single offset detection took **492 seconds** — eight minutes and
+twelve seconds for one scene:
+
+```
+08:12:38  job starts
+08:20:50  offset detection completes for scene 1   (492 s)
+08:23:00  job killed at the 10-minute limit (PLAN.md 8), status timed_out
+```
+
+A two-date change job needs **two** detections, so a change job on two uncached scenes can
+exceed the §8 timeout before it computes anything. The state machine handled it correctly —
+`timed_out`, not `failed`, with the right message — and resubmitting after the first detection
+was cached completed in **17 s**. So the failure is recoverable, and the cost is once per scene
+ever. But a first-time user can hit a ten-minute timeout for no reason they can see.
+
+**The margin is also thinner than §5.3.1 recorded.** That table gave 1.927 %–2.955 % for
+offset-absent scenes at decimation 4. `S2A_45QXF_20200330_1_L2A` measures **1.490 %** — below
+that range, still correctly classified, but with about **0.49 pp** of margin against the 1 %
+threshold rather than the 0.93 pp claimed. Nine scenes is not many.
+
+**Not fixed here, because the options trade against each other and one of them is a calibration
+that has already been changed once:**
+
+| Option | Cost |
+|---|---|
+| Accept and document | A first job on a fresh scene can time out. Recoverable by resubmitting. |
+| Decimation 8 | ~4× less data. Margin drops to ~0.21 pp, which is why 4 was chosen. |
+| Detect outside the job | Search is synchronous and user-facing; moving 8 minutes there is worse. |
+| Raise the §8 timeout | Weakens the backstop the timeout exists to be. |
+
+Wants a decision, and more scenes measured before touching the calibration again.
+
+---
+
+> **UX gap found 2026-07-31.** The change picker offers only scenes from the *current* search,
+> and §8 caps a search at 366 days. So the flagship 2020↔2026 comparison **cannot be expressed in
+> the web interface at all** — only through the API. Either the picker needs its own search, or
+> the date cap needs to not apply to it. Not fixed.
+
 ## 5.4 The four analyses
 
 All four share one pipeline; only the band selection and the arithmetic differ.

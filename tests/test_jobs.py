@@ -367,6 +367,23 @@ class TestOutputs:
         assert output.stats == {"mean": 0.42}
         assert output.bounds["type"] == "Polygon"
 
+    def test_warnings_round_trip(self, jobs):
+        """Stored on the row, not just in the GeoTIFF's tags."""
+        job = jobs.create("fake", KOLKATA_AOI, 10.0, [SCENE_ID])
+        jobs.add_output(job.id, "index_raster", "https://cdn.test/a.tif",
+                        KOLKATA_AOI, "EPSG:32645", 10.0,
+                        warnings=["no SCL band; cloud is NOT masked",
+                                  "baselines differ"])
+        (output,) = jobs.outputs_for(job.id)
+        assert output.warnings == ["no SCL band; cloud is NOT masked",
+                                   "baselines differ"]
+
+    def test_no_warnings_is_an_empty_list(self, jobs):
+        job = jobs.create("fake", KOLKATA_AOI, 10.0, [SCENE_ID])
+        jobs.add_output(job.id, "index_raster", "https://cdn.test/a.tif",
+                        KOLKATA_AOI, "EPSG:32645", 10.0)
+        assert jobs.outputs_for(job.id)[0].warnings == []
+
     def test_a_job_with_no_outputs_returns_empty(self, jobs):
         job = jobs.create("fake", KOLKATA_AOI, 10.0, [SCENE_ID])
         assert jobs.outputs_for(job.id) == []
@@ -559,6 +576,32 @@ class TestStatusAndResult:
         resp = api.get(f"/api/v1/jobs/{job_id}/result")
         assert resp.status_code == 200
         assert resp.json()["outputs"] == []
+
+    def test_warnings_reach_the_client(self, api, clean_db):
+        """A warning that only reaches the logs is not a warning. The case that
+        matters: a scene with no SCL band is processed UNMASKED, and someone
+        using the web interface never opens the GeoTIFF's tags."""
+        job_id = submit(api).json()["job_id"]
+        store = JobStore(engine=clean_db)
+        store.add_output(job_id, "index_raster", "https://cdn.test/a.tif",
+                         KOLKATA_AOI, "EPSG:32645", 10.0,
+                         warnings=["Scene X has no SCL band; cloud and shadow "
+                                   "are NOT masked."])
+        _complete(clean_db, job_id)
+
+        (output,) = api.get(f"/api/v1/jobs/{job_id}/result").json()["outputs"]
+        assert len(output["warnings"]) == 1
+        assert "NOT masked" in output["warnings"][0]
+
+    def test_no_warnings_is_an_empty_list_not_null(self, api, clean_db):
+        """So the client can render unconditionally without a null check."""
+        job_id = submit(api).json()["job_id"]
+        JobStore(engine=clean_db).add_output(
+            job_id, "index_raster", "https://cdn.test/a.tif", KOLKATA_AOI,
+            "EPSG:32645", 10.0)
+        _complete(clean_db, job_id)
+        (output,) = api.get(f"/api/v1/jobs/{job_id}/result").json()["outputs"]
+        assert output["warnings"] == []
 
     def test_an_output_is_serialised_with_bounds_as_a_bbox(self, api, clean_db):
         """Exercises the path real processing will use: 7.5 wants a bbox, the
