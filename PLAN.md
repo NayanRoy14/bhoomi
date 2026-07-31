@@ -209,6 +209,7 @@ Do not let the P2 differentiator depend on a single gated portal. Fallbacks, in 
 | D11 | **Demo pair is 2020-03-10 vs 2026-03-04 on tile 45QXF** *(2026-07-30, revised same day)* | Both EPSG:32645, cloud **0.000 %** and 0.00 %, six days apart in day-of-year — phenology matched, §5.4.4 seasonality confound near-eliminated. **Tile corrected from 45QXE to 45QXF:** central Kolkata (22.573 N) sits in the narrow overlap of both tiles, but 45QXE's top edge is 22.604 N, so any AOI of useful size falls off it. 45QXF spans 22.506–23.507 N and contains the whole **New Town / Rajarhat / Salt Lake** corridor — which is also where Kolkata's 2020–2026 urban expansion actually happened, making it a far stronger NDBI/NDVI change demo than the already-built-up city centre. |
 | D13 | **Demo AOI is New Town / Rajarhat: `88.35, 22.55, 88.52, 22.68`** *(2026-07-30)* | ~17 × 14 km ≈ 250 km², inside the §8 500 km² cap, fully inside tile 45QXF, and centred on the actual change corridor. |
 | D12 | **Python 3.14 is fine** *(2026-07-30)* | `rasterio 1.5.0` ships a `cp314` Windows wheel; downloaded and confirmed. No interpreter downgrade needed. |
+| D14 | **Object storage is Cloudflare R2** *(resolves O4, 2026-07-31)* | Egress is the dominant cost *and the dominant risk*, because TiTiler re-reads the COG on every tile and the point of a portfolio project is that strangers look at it. R2 charges none. See §9.4 for the numbers and for why B2 and S3 lose. |
 
 ## 3.2 Open — with owners and deadlines
 
@@ -217,7 +218,7 @@ Do not let the P2 differentiator depend on a single gated portal. Fallbacks, in 
 | ~~O1~~ | ~~Earth Search vs Planetary Computer~~ | ✅ **Resolved 2026-07-30** → D9 | |
 | ~~O2~~ | ~~`sentinel-2-l2a` vs `sentinel-2-c1-l2a`~~ | ✅ **Resolved 2026-07-30** → D10 | |
 | O3 | Hosting provider for the fixed-IP VPS | 2026-11-30 | Needs ≥4 GB RAM (§8), a static IPv4, and Indian/Singapore region for latency. Budget cap: ₹700/month. |
-| O4 | Object storage: Cloudflare R2 vs AWS S3 vs Backblaze B2 | 2026-12-31 | R2 has no egress fees, which matters because TiTiler will read these COGs repeatedly. Default to R2 unless testing says otherwise. |
+| ~~O4~~ | ~~Object storage: R2 vs S3 vs B2~~ | ✅ **Resolved 2026-07-31** → D14, §9.4 | |
 | O5 | Hand-roll OGC API – Processes vs mount pygeoapi | 2027-01-31 | Hand-rolling teaches more and keeps one service. Read pygeoapi's process-description schema either way — matching the standard's shape is most of the credibility. Default: hand-roll. |
 | O6 | Whether Bhoonidhi access materialises | **2027-01-15** | Hard gate. See §2.2. |
 
@@ -1051,7 +1052,7 @@ magnitude.
 **The actual constraint is output size and egress.** A 500 km² NDVI COG is ~20 MB; storage and
 repeated TiTiler reads are what scale with AOI, not compute. The 500 km² cap stays for V1
 because it keeps outputs small and the 30-day retention affordable — not because anything
-technical prevents raising it. Revisit it against real R2 costs (O4), not against runtime.
+technical prevents raising it. Revisit it against real R2 costs (D14), not against runtime.
 
 **Two concrete numbers this produces:**
 
@@ -1096,7 +1097,7 @@ Per §2.2, the backend needs a **static IPv4** to keep the Bhoonidhi path open. 
 4 GB / 2 vCPU VPS in an Indian or Singapore region, ~₹600–700/month (O3). The frontend may sit
 on Vercel separately — it has no IP constraint and gets a CDN for free.
 
-Object storage (O4) holds outputs; default to Cloudflare R2 for zero egress, because TiTiler
+Object storage holds outputs: **Cloudflare R2** (D14, §9.4), for zero egress, because TiTiler
 re-reads these COGs on every tile request.
 
 ## 9.3 Demo reliability
@@ -1107,6 +1108,75 @@ depends on a live worker responding within 90 seconds *will* fail during the one
 matters — an interviewer with a shared screen, on conference wifi.
 
 The live path stays available for anyone who wants to draw their own AOI. Both exist.
+
+## 9.4 Object storage — O4 resolved, 2026-07-31 → **Cloudflare R2**
+
+### What this project actually stores
+
+Measured across seven real NDVI outputs on the deployment: **~41 KB per km²** at 10 m
+(940 KB at 23 km², 1.37 MB at 33 km²). The §8 cap of 500 km² therefore lands at **~20 MB**,
+which confirms §8's earlier estimate. With 30-day retention (§6), a realistic portfolio load of a
+few hundred jobs a month at modest AOIs is **1–3 GB stored** — small enough that storage price is
+not the decision.
+
+**Egress is.** TiTiler re-reads the COG over range requests for every tile, and the entire point
+of a portfolio project is that strangers look at it. Storage is a rounding error; transfer is not.
+
+| Monthly egress | R2 | B2 | S3 (Mumbai) |
+|---|---|---|---|
+| 30 GB — a demo people visit | **$0** | ~$0.21 | ~$3.3 (≈₹290) |
+| 500 GB — a demo that gets *attention*, or a scraper | **$0** | ~$4.9 | ~$55 (≈₹4,700) |
+
+The expected-value gap is a few dollars. The **tail** gap is a bill roughly seven times the entire
+₹700/month hosting budget in O3, arriving unannounced, because somebody hotlinked a tile URL or a
+crawler walked the zoom levels. That asymmetry is the decision: R2 removes the tail rather than
+pricing it.
+
+### Why not the other two
+
+**B2 is disqualified on latency, not price.** Its regions are US East, US West, EU Central and
+Canada East — **no Asia-Pacific**, and the region is fixed at account creation and cannot be
+changed. TiTiler issues many small, often sequential range reads per tile; 150–250 ms of RTT per
+read from an India or Singapore VPS compounds into an unusable map. For a project whose stated
+purpose is Indian EO, storing the outputs in Virginia is the wrong shape regardless of the bill.
+
+**S3 wins on latency and loses on everything else.** `ap-south-1` is in Mumbai, which is the best
+possible answer for a VPS in India — this is the one real argument against R2 and it should be
+recorded as such. But AWS changed the S3 free tier in **July 2025**: new accounts get $200 of
+credits for six months instead of a permanent free allowance. This project runs Aug 2026–Mar 2027
+and is meant to *outlive* that as portfolio evidence. A bucket that silently begins billing
+mid-project, owned by a student, is the wrong default — and a forgotten S3 bucket accruing egress
+is a well-worn way to lose money quietly.
+
+R2 also sits behind Cloudflare's CDN natively, so tiles can be cached at an Indian PoP. Getting
+the same from S3 means adding CloudFront: more configuration, and egress billed anyway.
+
+### Why deciding now is safe
+
+**R2 speaks the S3 API.** The implementation is `boto3` and GDAL's `/vsis3/` with an endpoint
+override in either case, and `backend/storage.py` is already a `Storage` Protocol with the local
+backend behind it. Choosing wrong costs an endpoint, a key pair and a bucket name — not a
+rewrite. That is what makes it reasonable to settle this on measured *sizes* plus published
+*prices*, rather than waiting to benchmark a provider we would have had to sign up for anyway.
+
+### The one thing not measured
+
+**R2 read latency from an India/Singapore VPS.** It cannot be measured without an account, and it
+is the single number that could argue for S3 instead. Two things bound the risk: the CDN sits in
+front for tile reads, and the Protocol makes switching cheap. **Measure it once the account
+exists** — a `probes/` script timing a windowed read of a 20 MB COG from the VPS — and reopen this
+if it is bad.
+
+### What this unblocks, and one prerequisite
+
+Settling O4 is what makes the O3 deployment *safe*: §11 records that TiTiler is bound to
+127.0.0.1 only because it currently reads a filesystem. Once `tile_source()` returns an https URL,
+that exposure is gone rather than hidden, and the tile server can face the internet.
+
+**Prerequisite:** R2 requires a payment method on file even for the free tier. Nothing is charged
+under 10 GB storage / 1 M Class A / 10 M Class B operations per month — this project's expected
+load sits an order of magnitude inside all three — but the card has to be added before the bucket
+can be created.
 
 ---
 
@@ -1494,7 +1564,7 @@ watch progress → see the processed raster on the map. End to end, by a strange
 | `POST /jobs`, `GET /jobs/{id}`, `GET /jobs/{id}/result` | ✅ |
 | §7.3 rejections, §8 caps (AOI, scene count, concurrency, 20/hour) | ✅ |
 | **NDVI / NDWI / NDBI as real processes, COG out** | ✅ — see below |
-| Object storage (O4), TiTiler, frontend picker, change detection | not started |
+| Object storage (D14 — R2, decided but not implemented), change detection | not started |
 
 The only registered process is **`fake`**: it sleeps ~10 s, walks all five stages, and produces
 no raster. Submitting `ndvi` today returns `400 Unknown process 'ndvi'. Available: fake.` That

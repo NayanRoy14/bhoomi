@@ -181,7 +181,7 @@ backend/      FastAPI -- HTTP and nothing else
   api/errors.py   messages that say what to do about it
   db/             scenes cache, jobs and outputs, alembic migrations
   queue/          RQ setup, the process registry, the worker entry point
-  storage.py      where finished COGs live -- local disk, object storage later
+  storage.py      where finished COGs live -- local disk now, Cloudflare R2 next
   tiles.py        TiTiler URL shape and the colour ramp per index
   resolve.py      scene id -> Scene, cache first, catalogue second
 cache.py      per-scene BOA-offset decisions -- JSON file, or the scenes table
