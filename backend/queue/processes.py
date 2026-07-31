@@ -15,7 +15,12 @@ changed to make this work. The only new code is the part that is genuinely
 web-shaped — publishing the file and describing it for 7.5.
 
 `fake` is kept alongside them. It is the only way to exercise the queue
-without touching the network, and it is what the delivery tests use.
+without touching the network, and it is what the delivery tests use. It is
+registered but **unlisted** (`public=False`): a client discovering
+`change, fake, ndbi, ndvi, ndwi` would have no way to tell that one of those
+computes nothing, and a process catalogue is a statement about what the server
+is for. `get("fake")` still resolves and it still executes, so nothing that
+asks for it by name notices.
 
 ## Estimates
 
@@ -113,6 +118,15 @@ class ProcessSpec:
     description: str
     estimate_seconds: Callable[[float], float]
     run: Callable[[Reporter, Job], list[OutputSpec]]
+
+    #: Whether to advertise this process to clients. False means *unlisted*,
+    #: not disabled: `get()` still returns it and it still executes, so the
+    #: delivery tests are unaffected. Only `fake` sets it, and only because a
+    #: catalogue is a claim about what a server is for -- a client discovering
+    #: `change, fake, ndbi, ndvi, ndwi` has to work out for itself that one of
+    #: those computes nothing. Diagnostics belong in the registry, not in the
+    #: shop window.
+    public: bool = True
 
 
 def _index_estimate(mpixels: float) -> float:
@@ -334,6 +348,7 @@ FAKE = ProcessSpec(
     description="Queue plumbing check: sleeps ~10 s, produces no output.",
     estimate_seconds=_fake_estimate,
     run=_run_fake,
+    public=False,
 )
 
 #: NDVI/NDWI at 10 m, NDBI at 20 m -- D4: an index is computed at the coarsest
@@ -379,8 +394,17 @@ def get(name: str) -> ProcessSpec | None:
     return REGISTRY.get(name)
 
 
-def names() -> list[str]:
-    return sorted(REGISTRY)
+def names(include_hidden: bool = False) -> list[str]:
+    """Registered process names, advertised ones by default.
+
+    The default is the *public* list because every caller that shows a name to
+    a client -- the OGC process list, and the "available" array in an
+    unknown-process error -- wants that one. `include_hidden=True` is for
+    diagnostics, where hiding a registered process would make a log lie about
+    why a job could not be dispatched.
+    """
+    return sorted(name for name, spec in REGISTRY.items()
+                  if include_hidden or spec.public)
 
 
 def estimate_for(spec: ProcessSpec, aoi_area_km2: float) -> int:

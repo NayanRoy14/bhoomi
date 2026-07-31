@@ -62,8 +62,21 @@ class TestLandingAndConformance:
             assert status in (200, 503), f"{href} -> {status}"
             assert status != 404, href
 
+    def test_conformance_sits_under_the_landing_page(self, bare):
+        """`{root}/conformance`, where the root is wherever the landing page is.
+
+        The landing page is at `/ogc`, so OGC API - Common puts the conformance
+        declaration at `/ogc/conformance`. It used to be served only at
+        `/conformance`: link-following clients were fine, but a validator
+        applying the standard's path rule to the root it was given got a 404
+        from an API that advertises Core. Both paths answer now; this pins the
+        one the standard actually asks for.
+        """
+        assert bare.get("/ogc/conformance").status_code == 200
+        assert bare.get("/ogc/conformance").json() == bare.get("/conformance").json()
+
     def test_conformance_declares_core(self, bare):
-        classes = bare.get("/conformance").json()["conformsTo"]
+        classes = bare.get("/ogc/conformance").json()["conformsTo"]
         assert any(c.endswith("ogcapi-processes-1/1.0/conf/core") for c in classes)
         assert any(c.endswith("conf/ogc-process-description") for c in classes)
         assert any(c.endswith("conf/job-list") for c in classes)
@@ -87,8 +100,22 @@ class TestProcessDescription:
         listed = {p["id"] for p in bare.get("/ogc/processes").json()["processes"]}
         assert listed == set(processes.names())
 
+    def test_the_queue_check_is_not_advertised(self, bare):
+        """`fake` computes nothing; a catalogue of processes should not offer it.
+
+        Unlisted, not removed. It stays in the registry and stays executable --
+        the delivery tests submit it -- so this pins the distinction: absent
+        from what clients discover, present to anything that asks for it by
+        name.
+        """
+        listed = {p["id"] for p in bare.get("/ogc/processes").json()["processes"]}
+        assert "fake" not in listed
+        assert "fake" in processes.names(include_hidden=True)
+        assert processes.get("fake") is not None
+        assert bare.get("/ogc/processes/fake").status_code == 200
+
     def test_each_process_describes_itself(self, bare):
-        for name in processes.names():
+        for name in processes.names(include_hidden=True):
             body = bare.get(f"/ogc/processes/{name}").json()
             assert body["id"] == name
             assert "aoi" in body["inputs"]

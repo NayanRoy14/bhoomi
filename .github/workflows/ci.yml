@@ -13,7 +13,7 @@
 #   harmonize     the regression gate, its own job because it is the one
 #                 failure that produces confidently wrong output rather than
 #                 a visible error
-#   integration   the ~79 tests that need Postgres, Redis and S3, plus the
+#   integration   the 105 tests that need Postgres, Redis and S3, plus the
 #                 migration round trip
 #   frontend      typecheck and build
 

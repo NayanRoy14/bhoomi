@@ -1301,7 +1301,8 @@ POST /ogc/processes/{id}/execution        → 201 + Location: /ogc/jobs/{jobId}
 GET  /ogc/jobs                            job list
 GET  /ogc/jobs/{jobId}                    status info
 GET  /ogc/jobs/{jobId}/results            results
-GET  /conformance                         declared conformance classes
+GET  /ogc/conformance                     declared conformance classes
+GET  /conformance                         the same, on the path first published
 ```
 
 This is a **thin standards-compliant façade over the same queue** — not a parallel
@@ -1312,10 +1313,18 @@ Acceptance test for this feature: **a QGIS user, or a Python script using `owsli
 that works, the standards claim is real.
 
 > ✅ **Implemented and passing, 2026-07-31.** `examples/ogc_client.py` is that acceptance test
-> written out: standard library only, no `requests` and no `owslib`, and it knows no Bhoomi URL
-> beyond the base. It reads `/conformance`, lists processes, reads the input schema from the
-> process description, executes, polls the `self` link, and fetches the raster from the `results`
-> document. Run against the stack it printed:
+> written out: standard library only, no `requests` and no `owslib`. It constructs exactly one
+> URL — the landing page — and reaches conformance, the process list, the input schema, the job
+> and the raster by following link relations from there, polling the `self` link and fetching the
+> result from the `results` document. Run against the stack it printed:
+>
+> **Corrected 2026-07-31 (second pass).** As first written it hardcoded `/conformance` and
+> `/ogc/processes` rather than following links, so "knows no Bhoomi URL beyond the base" was
+> not quite true — and the hardcoding hid a real defect. The landing page sits at `/ogc`, which
+> makes `/ogc` the API root, so OGC API - Common puts the conformance declaration at
+> `/ogc/conformance`; it was served only at `/conformance`, and `/ogc/conformance` returned 404
+> to anything applying the standard's own path rule. Both paths answer now, the client discovers
+> instead of assuming, and `test_conformance_sits_under_the_landing_page` pins it.
 >
 > ```
 > 201 Created -> /ogc/jobs/4243ccf4-...   Preference-Applied: respond-async
@@ -1955,6 +1964,14 @@ the status field, which is the one field the whole design asks the user to trust
 Verified with a worker in a separate process: submit → `202` + `Location` → poll → all six
 states observed in order (`queued, searching, reading, processing, writing_cog, completed`) →
 `200` with `outputs: []`. The empty array is the honest answer, not a placeholder.
+
+> **Since 2026-07-31, `fake` is registered but unlisted** (`ProcessSpec.public=False`). Once the
+> real indices existed it was still being advertised by `/ogc/processes`, so a client discovering
+> the server saw `change, fake, ndbi, ndvi, ndwi` with nothing to distinguish the one that
+> computes nothing — and the same list appeared in the `available` array of every
+> unknown-process error. It stays in the registry, stays executable, and the delivery tests still
+> submit it; it is simply no longer offered. `names()` returns the public list, and
+> `names(include_hidden=True)` the whole registry for diagnostics.
 
 **The state machine is enforced in SQL, not in Python.** `advance` puts the legality check in
 the UPDATE's `WHERE` clause, so when two workers race, the database picks the winner and the

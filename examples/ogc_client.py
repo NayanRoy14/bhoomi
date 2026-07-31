@@ -25,6 +25,7 @@ import json
 import sys
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 
 #: New Town / Rajarhat, Kolkata -- D13. Small enough to finish quickly.
@@ -78,6 +79,33 @@ def post(url: str, body: dict) -> tuple[int, "urllib.request.email.message.Messa
         return exc.code, exc.headers, json.loads(exc.read())
 
 
+def link_map(document_url: str, document: dict) -> dict[str, str]:
+    """Index a document's links by relation, with hrefs made absolute.
+
+    Relative hrefs are legal, so they are resolved against the document that
+    carried them rather than against the base -- those differ the moment an API
+    is mounted under a prefix, which this one is.
+    """
+    return {
+        link["rel"]: urllib.parse.urljoin(document_url, link["href"])
+        for link in document.get("links", [])
+    }
+
+
+def follow(links: dict[str, str], name: str) -> str:
+    """Resolve one link relation by its short name.
+
+    OGC relations are full URIs -- `http://www.opengis.net/def/rel/ogc/1.0/processes`
+    -- so matching on the last segment finds the right one without hardcoding
+    the whole IANA-style URI, and still works if a server uses the bare name.
+    """
+    for rel, href in links.items():
+        if rel == name or rel.rstrip("/").endswith(f"/{name}"):
+            return href
+    raise SystemExit(
+        f"landing page offers no {name!r} link; it advertised: {sorted(links)}")
+
+
 def find_scene(base: str, aoi: dict, start: str, end: str) -> str:
     """The one Bhoomi-specific call: scene discovery is not part of Processes.
 
@@ -107,15 +135,25 @@ def main() -> int:
     args = parser.parse_args()
     base = args.base.rstrip("/")
 
+    print("0. landing page")
+    # The only URL this script constructs. Everything after it comes out of a
+    # link relation, which is the difference between a client that speaks the
+    # standard and one that has memorised a particular server's paths. It also
+    # catches a class of bug hardcoding hides: the conformance declaration was
+    # once linked from here but served somewhere else entirely.
+    landing = get(f"{base}/ogc")
+    links = link_map(f"{base}/ogc", landing)
+    print(f"   {landing['title']}")
+
     print("1. conformance")
-    classes = get(f"{base}/conformance")["conformsTo"]
+    classes = get(follow(links, "conformance"))["conformsTo"]
     core = [c for c in classes if c.endswith("processes-1/1.0/conf/core")]
     if not core:
         raise SystemExit("server does not declare OGC API - Processes Core")
     print(f"   declares {len(classes)} classes, including Processes Core")
 
     print("2. processes offered")
-    offered = get(f"{base}/ogc/processes")["processes"]
+    offered = get(follow(links, "processes"))["processes"]
     print("   " + ", ".join(p["id"] for p in offered))
     if args.process not in {p["id"] for p in offered}:
         raise SystemExit(f"{args.process!r} is not offered")

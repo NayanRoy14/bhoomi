@@ -291,7 +291,7 @@ def landing() -> LandingPage:
         links=[
             Link(href="/ogc", rel="self", type="application/json",
                  title="This document"),
-            Link(href="/conformance", rel="http://www.opengis.net/def/rel/ogc/1.0/conformance",
+            Link(href="/ogc/conformance", rel="http://www.opengis.net/def/rel/ogc/1.0/conformance",
                  type="application/json", title="Conformance declaration"),
             Link(href="/ogc/processes", rel="http://www.opengis.net/def/rel/ogc/1.0/processes",
                  type="application/json", title="Processes offered"),
@@ -304,8 +304,25 @@ def landing() -> LandingPage:
     )
 
 
-@router.get("/conformance", response_model=Conformance,
+#: Both paths serve the same declaration, and the reason is a compliance bug
+#: this had for real. The landing page is at `/ogc`, which makes `/ogc` the API
+#: root; OGC API - Common puts the conformance declaration at `{root}/conformance`,
+#: so the spec-correct path is `/ogc/conformance`. It was only ever served at
+#: `/conformance`. A client that followed the landing page's link worked, but a
+#: validator -- or anyone applying the standard's own path rule to the root they
+#: were given -- got a 404 from an API advertising Core conformance.
+#:
+#: `/ogc/conformance` is now the canonical one and the landing page points there.
+#: `/conformance` stays because it was published, `examples/ogc_client.py` and
+#: docs/api.md used it, and removing a working URL to fix an unreachable one
+#: would trade this bug for a worse one.
+_CONFORMANCE_PATHS = ("/ogc/conformance", "/conformance")
+
+
+@router.get(_CONFORMANCE_PATHS[0], response_model=Conformance,
             summary="Conformance declaration")
+@router.get(_CONFORMANCE_PATHS[1], response_model=Conformance,
+            summary="Conformance declaration (legacy path)", include_in_schema=False)
 def conformance() -> Conformance:
     return Conformance(conformsTo=CONFORMANCE)
 

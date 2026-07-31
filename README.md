@@ -72,9 +72,44 @@ the decisions that shaped each — as diagrams that render here and diff like te
 - **STAC** — catalogue search (Element84 Earth Search, `sentinel-2-l2a`)
 - **Cloud-Optimized GeoTIFF** — all outputs, validated before a job is marked complete
 - **OGC API – Processes Part 1: Core** — implemented at `/ogc`, async execution. The acceptance
-  test is `examples/ogc_client.py`: standard library only, no Bhoomi-specific URLs beyond the
-  base, it discovers the processes, reads the input schema, executes, polls and downloads the
-  GeoTIFF with no browser involved
+  test is `examples/ogc_client.py`: standard library only, it constructs exactly one URL — the
+  landing page — and reaches conformance, the process list, the input schema, the job and the
+  GeoTIFF by following link relations from there, with no browser involved. Scene search is the
+  one step it does against a Bhoomi route, because finding a scene id is STAC's job and not
+  something Processes covers; the script says so where it happens
+
+## Related work
+
+Bhoomi is not the first server-side EO processing stack, and the honest framing is that
+most of its architecture is a well-trodden path. What follows is where it sits.
+
+| Project | What it is | How Bhoomi differs |
+|---|---|---|
+| [**eoAPI**](https://eoapi.dev/) (Development Seed) | The closest architectural neighbour: pgSTAC + stac-fastapi + titiler-pgstac bundled and version-pinned. Does band math — including NDVI — as a tile-time `expression`. | eoAPI computes *per tile request*, for viewing. Bhoomi computes **once, as a job**, and the artifact is a persisted, validated COG with provenance tags. Different output contract: a URL you can hand to QGIS, not a tile pyramid. eoAPI's own docs say its value is "integration, not innovation" — that is fair and it is a better choice than Bhoomi for serving a catalogue. |
+| [**openEO by TiTiler**](https://github.com/sentinel-hub/titiler-openeo) (Sinergise + Development Seed, 2025) | A light openEO backend on TiTiler, deployed in the Copernicus Data Space for demonstration. | Synchronous, visualisation-first, openEO process graphs. Bhoomi is async-first and speaks OGC API – Processes. |
+| [**openEO**](https://openeo.org/) | The standard for federated EO processing; virtual data cubes, R/Python/JS clients, multiple backends. | Much larger in scope. Bhoomi deliberately implements **OGC API – Processes Part 1: Core** instead — one standard, fully, over a process graph language partially. |
+| [**pygeoapi**](https://docs.pygeoapi.io/) | Python OGC API server with an OGC API – Processes plugin architecture and a pluggable job manager. | If the goal were only to expose processes, this is the off-the-shelf answer. Bhoomi implements Part 1 Core directly because the job/queue model came first and the standard was fitted to it — see the acceptance test in `examples/ogc_client.py`. |
+| [**Open Data Cube**](https://www.opendatacube.org/) / `odc-stac`, [**gdalcubes**](https://github.com/appelmar/gdalcubes) | Index-and-load datacube frameworks behind Digital Earth Australia/Africa. | Library-level, xarray/Dask-shaped, no HTTP job service. Bhoomi is a service with a state machine. |
+| [**Sentinel Hub**](https://www.sentinel-hub.com/develop/api/) | Commercial Processing / Batch / Statistical APIs. | Closed and paid. Handles the reflectance offset for you, which is precisely the problem Bhoomi had to solve itself. |
+| [**Bhuvan**](https://bhuvan.nrsc.gov.in/) / [**Bhoonidhi**](https://bhoonidhi.nrsc.gov.in/) (NRSC/ISRO) | India's geoportal and open-data dissemination hub. | Both are **portals** — visualise, browse, download. Neither exposes on-demand server-side computation over an API. This is the gap Bhoomi is aimed at. |
+
+**Where Bhoomi has something the others do not.** Every stack above resolves the Sentinel-2
+baseline-04.00 reflectance offset from *metadata* or by pre-harmonising a whole collection:
+Earth Engine ships `HARMONIZED` collections, Sentinel Hub applies `harmonizeValues`,
+[`stactools-sentinel2` reads `BOA_ADD_OFFSET`](https://github.com/stactools-packages/sentinel2/issues/44)
+into the STAC raster extension, GRASS `i.sentinel.import` takes a flag, and the Planetary
+Computer [leaves it to the user, in an issue still open](https://github.com/microsoft/PlanetaryComputer/issues/134).
+
+Those all work when the metadata is trustworthy. On Element84 Earth Search — the catalogue
+Bhoomi actually reads — **it measurably is not**: `earthsearch:boa_offset_applied` came back
+`False` meaning *offset present* on one scene and *offset absent* on another, and
+`raster:bands.offset` reported −0.1 regardless. So Bhoomi decides **from the pixels**, and,
+more usefully, **declines to decide** when the pixels cannot support one, falling back to
+metadata and attaching a warning to the output. Across 48 scenes spanning desert to delta it
+misclassifies none.
+
+A detector that returns "I don't know" is the part worth reusing. It is also the part that took
+three wrong answers to reach — see [below](#a-note-on-the-hard-part).
 
 ## What data?
 
@@ -101,7 +136,7 @@ the decisions that shaped each — as diagrams that render here and diff like te
 | Object storage — Cloudflare R2 | **Implemented**, verified against MinIO; needs a real bucket |
 | Two-date change detection | **Working** — with baseline and seasonality warnings |
 | Before/after swipe | **Working** — a change job publishes both dates as well as the difference |
-| CI — tests, migrations, harmonization gate | **Working** — 5 jobs, integration runs 363 tests with no skips |
+| CI — tests, migrations, harmonization gate | **Working** — 5 jobs, integration runs all 414 tests with no skips |
 | OGC API – Processes Part 1: Core | **Working** — `examples/ogc_client.py` executes and downloads with no Bhoomi-specific code |
 
 A real NDVI over New Town / Rajarhat, submitted to the deployed stack and finished in 11 s:
@@ -131,7 +166,7 @@ Outputs go to local disk by default and to object storage when `BHOOMI_S3_BUCKET
 `cog_uri` is a URL either way. On local disk the worker and the API must share a filesystem;
 object storage removes that constraint.
 
-412 tests. 105 of them need Postgres, Redis or an S3-compatible store, and skip without:
+414 tests. 105 of them need Postgres, Redis or an S3-compatible store, and skip without:
 
 ```bash
 docker run -d --rm --name bhoomi-test-pg -p 55432:5432 \
@@ -224,7 +259,7 @@ processing/   pure raster library -- no web dependencies, importable from a note
   cog.py          COG writing, validation, provenance tags
 examples/     worked analyses over Kolkata
 probes/       measurement scripts -- every empirical claim in PLAN.md is re-runnable
-tests/        350 tests; 78 need Postgres, Redis or S3, the rest need nothing
+tests/        414 tests; 105 need Postgres, Redis or S3, the rest need nothing
 docs/         limitations.md -- what Bhoomi cannot tell you; Bhoonidhi access request
 PLAN.md       the full project plan, with a live decisions register
 ```

@@ -333,12 +333,13 @@ instead. See [`limitations.md`](limitations.md).
 ## OGC API – Processes
 
 Part 1: Core, asynchronous execution. Start at `/ogc` and follow links, or read
-`/conformance` first.
+`/ogc/conformance` first.
 
 | endpoint | |
 |---|---|
 | `GET /ogc` | Landing page, links onward |
-| `GET /conformance` | Which classes are implemented |
+| `GET /ogc/conformance` | Which classes are implemented |
+| `GET /conformance` | The same document, at the path it was first published on |
 | `GET /ogc/processes` | Process list |
 | `GET /ogc/processes/{processID}` | Full input and output schemas |
 | `POST /ogc/processes/{processID}/execution` | Execute → `201` + `Location` |

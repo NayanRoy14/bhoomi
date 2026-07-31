@@ -49,8 +49,11 @@ def run_job(job_id: str) -> str:
     spec = processes.get(job.process)
     if spec is None:
         # Reachable if a process is removed between submission and execution.
+        # include_hidden: this is the operator's log, and a diagnostic that
+        # omitted an unlisted process would misreport why dispatch failed.
         _fail(store, job_id, f"Unknown process {job.process!r}.",
-              f"process {job.process!r} not in registry {processes.names()}")
+              f"process {job.process!r} not in registry "
+              f"{processes.names(include_hidden=True)}")
         return JobStatus.FAILED.value
 
     def report(status: JobStatus) -> None:
