@@ -80,7 +80,7 @@ makes an OGC API – Processes async execution model natural rather than bolted 
 | `pipeline.py` — composition layer | **Working** — AOI + dates in, COG out |
 | `examples/` — worked Kolkata analyses | **Working** |
 | FastAPI — `/health`, scene search, `/docs` | **Working** |
-| Next.js + MapLibre — draw, search, results | **Working** |
+| Next.js + MapLibre — draw, search, analyse, download | **Working** |
 | Docker Compose | **Working** — built and run; backend + postgres verified end to end |
 | PostGIS scene caching + alembic | **Working** — write-through on search, 39 tests |
 | Job queue — Redis + RQ, worker, state machine | **Working** |
@@ -96,11 +96,16 @@ ndvi    median +0.332   range -0.295 .. +0.811   valid_fraction 0.99998
 COG     EPSG:32645, 10 m, tiled, deflate, overviews, nodata declared -- 940 KB
 ```
 
+The browser closes the loop too: draw an area, search, pick a scene, pick a process, watch
+live progress, download the result. The one thing it will not do is paint the raster on the
+map — that needs the tile server, so the map shows the output's extent and the panel shows its
+statistics.
+
 Outputs are written to local disk and served from `/api/v1/jobs/{id}/download` until the
 object-storage decision lands. `cog_uri` is a URL either way, so nothing downstream has to
 change when it does — but the worker and the API must currently share a filesystem.
 
-278 tests. 62 of them need Postgres or Redis and skip without:
+285 tests. 64 of them need Postgres or Redis and skip without:
 
 ```bash
 docker run -d --rm --name bhoomi-test-pg -p 55432:5432 \
@@ -169,7 +174,7 @@ backend/      FastAPI -- HTTP and nothing else
   storage.py      where finished COGs live -- local disk, object storage later
   resolve.py      scene id -> Scene, cache first, catalogue second
 cache.py      per-scene BOA-offset decisions -- JSON file, or the scenes table
-frontend/     Next.js + MapLibre -- AOI drawing, scene browsing
+frontend/     Next.js + MapLibre -- AOI drawing, scene browsing, analysis
 catalogue/    STAC client -- no web framework, testable without a server
   base.py         Scene, SearchQuery, Catalogue protocol
   earthsearch.py  Element84 Earth Search, with retry and deduplication
@@ -183,7 +188,7 @@ processing/   pure raster library -- no web dependencies, importable from a note
   cog.py          COG writing, validation, provenance tags
 examples/     worked analyses over Kolkata
 probes/       measurement scripts -- every empirical claim in PLAN.md is re-runnable
-tests/        278 tests; 62 need Postgres or Redis, the rest need nothing
+tests/        285 tests; 64 need Postgres or Redis, the rest need nothing
 docs/         data-source notes and the Bhoonidhi access request
 PLAN.md       the full project plan, with a live decisions register
 ```

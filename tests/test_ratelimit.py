@@ -154,3 +154,52 @@ class TestMiddleware:
         ratelimit.set_limiter(ratelimit.SlidingWindowLimiter(limit=120, window=3600))
         for _ in range(10):
             assert client.post("/api/v1/scenes/search", json=body()).status_code == 200
+
+
+class TestPollingBudget:
+    """PLAN.md 7.4 says poll at 2 s; PLAN.md 8 caps requests at 120/hour.
+
+    Those two are incompatible if status polls are charged to the search
+    budget: four minutes of polling locks a user out of the whole API. It is
+    not a hypothetical -- it fired the first time the UI ran a job end to end,
+    and the 429 came back for *search* while a job was still running.
+
+    The search budget exists to stop Bhoomi amplifying requests at Earth
+    Search. A status poll is one indexed read of a local table, so it belongs
+    on its own, far larger allowance.
+    """
+
+    def test_a_status_poll_is_not_charged_to_the_search_budget(self, client):
+        ratelimit.set_limiter(ratelimit.SlidingWindowLimiter(limit=2, window=60))
+        ratelimit.set_poll_limiter(ratelimit.SlidingWindowLimiter(limit=100, window=60))
+
+        for _ in range(20):
+            # 404 because the job does not exist -- but it passed the limiter,
+            # which is what is under test.
+            assert client.get("/api/v1/jobs/00000000-0000-0000-0000-000000000000"
+                              ).status_code != 429
+
+        # And the search budget is untouched by all that polling.
+        assert client.post("/api/v1/scenes/search", json=body()).status_code == 200
+
+    def test_polling_still_has_a_ceiling(self, client):
+        ratelimit.set_poll_limiter(ratelimit.SlidingWindowLimiter(limit=3, window=60))
+        path = "/api/v1/jobs/00000000-0000-0000-0000-000000000000"
+        for _ in range(3):
+            client.get(path)
+        assert client.get(path).status_code == 429
+
+    def test_submitting_is_not_a_poll(self, client):
+        """POST to the same prefix keeps the search budget; only reads are cheap."""
+        request = type("R", (), {
+            "method": "POST",
+            "url": type("U", (), {"path": "/api/v1/jobs"})(),
+        })()
+        assert ratelimit.is_poll(request) is False
+
+    def test_downloading_a_result_counts_as_a_poll(self, client):
+        request = type("R", (), {
+            "method": "GET",
+            "url": type("U", (), {"path": "/api/v1/jobs/abc/download"})(),
+        })()
+        assert ratelimit.is_poll(request) is True

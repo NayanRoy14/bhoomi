@@ -1571,9 +1571,53 @@ phase because `fake` produces no file:
   the whole COG. Storage now exposes `scratch_dir()` and the raster is built inside the
   destination filesystem, making the publish a rename.
 
-`estimated_seconds` for an index is the §8 fit, `3.2 + 2.8 × Mpixels`, plus 6 s for offset
-detection when the scene has not been measured — omitting that term understates a first-time
-job by more than a third.
+`estimated_seconds` for an index is the §8 fit, `3.2 + 2.8 × Mpixels`, plus offset detection when
+the scene has not been measured — omitting that term understates a first-time job several times
+over.
+
+### Progress, 2026-07-31 — the analysis picker, and January's exit criterion
+
+The frontend now closes the loop: draw → search → pick a scene → pick a process → submit → live
+progress → stats and a download. Driven in a real browser, not asserted from a test: 31.4 km²
+over Rajarhat, 28 scenes, NDVI on `S2C_45QXF_20260108_0_L2A` finished with **median +0.468,
+mean +0.447, 100 % valid**, EPSG:32645 at 10 m.
+
+Polling is at 2 s per §7.4. A determinate bar, not a spinner: the server reports real progress
+(§4.3), and a spinner would claim we do not know when in fact we are told. Failures show the
+API's own message — those are written to be actionable ("this AOI is only 38 % inside scene X"),
+so replacing them with "Processing failed" would discard the most useful thing the backend makes.
+
+**The map draws the output extent, not the raster.** A dashed outline, because rendering pixels
+needs the tile server. It earns its place anyway: the snapped output grid is slightly larger than
+the drawn AOI, and seeing that is the difference between trusting the result and guessing.
+
+**§11's exit criterion is met except for one clause.** "Draw a polygon → pick a scene → click
+NDVI → watch progress → see the processed raster on the map" — everything but the last clause,
+which is TiTiler. And "on the public deployment", which is O3.
+
+**Three bugs, all found by using it rather than by testing it:**
+
+- **§7.4 and §8 contradicted each other.** Polling at 2 s against a 120/hour budget is four
+  minutes of polling before a user is locked out of the *whole API* — search included. It fired
+  on the first UI run: a 429 for search while a job was still going. The search budget exists to
+  stop Bhoomi amplifying requests at Earth Search; a status poll is one indexed local read.
+  Polls now have their own 1200/hour allowance (`BHOOMI_POLL_LIMIT`).
+- **`Worker.count()` undercounts.** Two workers running, health reporting one. Every worker runs
+  `clean_worker_registry` at startup, so replicas starting together race and one prunes the
+  other's registration. Membership does not affect consumption — both were taking jobs — but the
+  number is what an operator reads. Counting live heartbeat keys instead trades a persistent
+  undercount for a few seconds of overcount after a restart, which is the better error.
+- **A four-column stats grid does not fit a 300 px sidebar.** It clipped the last value and gave
+  the panel a horizontal scrollbar. Two columns, and `overflow-x: hidden` on the sidebar so no
+  single wide child can do it again.
+
+**And a correction to §5.3.1's cost.** Decimation 4 was recorded there as ~7 s from the host. In
+the worker container, against a warm connection, it is **~11 s** against ~2.2 s at 8 — and an
+*unwarmed* read has been seen at 159 s, with a first job at 65 s end to end. The 11 s is the
+steady state and 4 still stands: it buys ~0.93 pp of margin against 8's 0.21 pp on the highest-risk
+decision in the project, paid once per scene into a cache every worker shares. But
+`OFFSET_DETECTION_SECONDS` was 6.0 and is now 11.0, because a UI that says "about 10 s" for a job
+that takes a minute is worse than one that says nothing.
 
 ---
 

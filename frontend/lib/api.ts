@@ -55,6 +55,84 @@ export interface Health {
   workers: number | null;
 }
 
+/* --------------------------------------------------------------- jobs (7.3) */
+
+export interface JobCreateRequest {
+  process: string;
+  scene_ids: string[];
+  aoi: Polygon;
+  parameters?: Record<string, unknown>;
+}
+
+export interface Link {
+  rel: string;
+  href: string;
+  type: string;
+}
+
+export interface JobCreated {
+  job_id: string;
+  status: string;
+  position_in_queue: number;
+  estimated_seconds: number;
+  links: Link[];
+}
+
+/** The `job_status` enum in backend/db/jobs.py. */
+export type JobStatus =
+  | "queued"
+  | "searching"
+  | "reading"
+  | "processing"
+  | "writing_cog"
+  | "completed"
+  | "failed"
+  | "cancelled"
+  | "timed_out";
+
+export const TERMINAL_STATUSES: readonly JobStatus[] = [
+  "completed",
+  "failed",
+  "cancelled",
+  "timed_out",
+];
+
+export function isTerminal(status: string): boolean {
+  return (TERMINAL_STATUSES as readonly string[]).includes(status);
+}
+
+export interface Job {
+  job_id: string;
+  process: string;
+  status: JobStatus;
+  progress: number;
+  message: string;
+  /** User-facing only. The traceback is never served (PLAN.md 4.3). */
+  error_message: string | null;
+  created_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+}
+
+export interface Output {
+  type: string;
+  cog: string;
+  download: string;
+  bounds: number[];
+  crs: string;
+  resolution_m: number;
+  valid_fraction: number | null;
+  stats: Record<string, number> | null;
+  expires_at: string | null;
+  /** Null until TiTiler is wired up; better absent than a URL that 404s. */
+  tiles: string | null;
+}
+
+export interface JobResult {
+  job_id: string;
+  outputs: Output[];
+}
+
 /** An API error carrying the server's code and message. */
 export class ApiError extends Error {
   constructor(
@@ -104,4 +182,17 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body),
     }),
+
+  createJob: (body: JobCreateRequest) =>
+    request<JobCreated>("/api/v1/jobs", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+
+  getJob: (id: string) => request<Job>(`/api/v1/jobs/${id}`),
+
+  getJobResult: (id: string) => request<JobResult>(`/api/v1/jobs/${id}/result`),
+
+  /** Absolute, so it works as an href and as a GIS data source. */
+  downloadUrl: (id: string) => `${API_URL}/api/v1/jobs/${id}/download`,
 };

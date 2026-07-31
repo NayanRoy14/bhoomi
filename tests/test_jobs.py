@@ -104,9 +104,15 @@ class TestProcessRegistry:
         assert processes.estimate_for(processes.FAKE, 251.5) == 10
 
     def test_an_index_estimate_uses_the_measured_fit(self):
-        """PLAN.md 8: 3.2 + 2.8 x Mpixels, plus 6 s of offset detection."""
-        # 251.5 km2 at 10 m is 2.515 Mpixels -> 3.2 + 7.04 + 6.0 = 16.2
-        assert processes.estimate_for(processes.get("ndvi"), 251.5) == 16
+        """PLAN.md 8: 3.2 + 2.8 x Mpixels, plus offset detection."""
+        # 251.5 km2 at 10 m is 2.515 Mpixels -> 3.2 + 7.04 + 11.0 = 21.2
+        assert processes.estimate_for(processes.get("ndvi"), 251.5) == 21
+
+    def test_the_estimate_includes_offset_detection(self):
+        """Omitting it understated a first-time job by several times over --
+        the UI said 10 s for a job that took 65."""
+        assert processes.estimate_for(processes.get("ndvi"), 1.0) > \
+            processes.OFFSET_DETECTION_SECONDS
 
     def test_a_bigger_aoi_estimates_longer(self):
         small = processes.estimate_for(processes.get("ndvi"), 10.0)
@@ -385,7 +391,7 @@ def api(clean_db, monkeypatch):
     """TestClient with a real database and a queue that only records."""
     from backend.api.deps import get_catalogue, get_scene_store
     from backend.api.main import app
-    from backend.api.ratelimit import get_job_limiter, get_limiter
+    from backend.api.ratelimit import get_job_limiter, get_limiter, get_poll_limiter
     from backend.db.scenes import PostgresSceneStore
     from backend.queue import connection as queue_connection
     from tests.test_catalogue import StubCatalogue
@@ -399,6 +405,7 @@ def api(clean_db, monkeypatch):
     app.dependency_overrides[get_scene_store] = lambda: PostgresSceneStore(engine=clean_db)
     get_limiter().reset()
     get_job_limiter().reset()
+    get_poll_limiter().reset()
     try:
         client = TestClient(app, client=CLIENT, raise_server_exceptions=False)
         client.queue = queue
@@ -436,7 +443,7 @@ class TestSubmission:
     def test_a_real_index_is_accepted_and_estimated(self, api):
         resp = submit(api, process="ndvi")
         assert resp.status_code == 202
-        assert resp.json()["estimated_seconds"] == 16
+        assert resp.json()["estimated_seconds"] == 21
 
     def test_the_wrong_number_of_scenes_is_rejected(self, api):
         resp = submit(api, scene_ids=[SCENE_ID, SCENE_ID])
@@ -665,3 +672,25 @@ class TestQueueDelivery:
         body = TestClient(app, client=CLIENT).get("/health").json()
         assert body["queue_depth"] == 0
         assert body["status"] == "ok"
+
+    def test_worker_count_does_not_depend_on_the_registry_set(self, redis_conn):
+        """RQ's `rq:workers:<queue>` set undercounts when replicas start
+        together -- each worker's startup cleanup can prune another's
+        registration. The heartbeat keys are what actually track a live worker.
+        """
+        from backend.api.routes.health import _live_workers
+
+        assert _live_workers(redis_conn) == 0
+        redis_conn.set("rq:worker:aaaa", "x", ex=60)
+        redis_conn.set("rq:worker:bbbb", "x", ex=60)
+        # Deliberately NOT added to the registry sets -- the situation observed
+        # on the deployment, where two live workers showed as one.
+        assert _live_workers(redis_conn) == 2
+
+    def test_the_registry_sets_are_not_counted_as_workers(self, redis_conn):
+        """`rq:workers` and `rq:workers:<queue>` must not match the key scan."""
+        from backend.api.routes.health import _live_workers
+
+        redis_conn.sadd("rq:workers", "rq:worker:aaaa")
+        redis_conn.sadd("rq:workers:bhoomi", "rq:worker:aaaa")
+        assert _live_workers(redis_conn) == 0

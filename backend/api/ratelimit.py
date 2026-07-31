@@ -119,8 +119,26 @@ def client_key(request: Request) -> str:
 #: burn its job budget doing so.
 JOB_LIMIT = int(os.getenv("BHOOMI_JOB_LIMIT", "20"))
 
+#: Status polling gets its own, far larger budget.
+#:
+#: 7.4 tells the frontend to poll at 2 s while a job is active. Against the
+#: 120/hour search budget that is four minutes of polling before a user is
+#: locked out of the *entire* API, search included -- which is exactly what
+#: happened the first time the UI ran a job end to end.
+#:
+#: The search budget exists for a reason that does not apply here: every search
+#: becomes a request to Earth Search, so an unthrottled endpoint turns Bhoomi
+#: into an amplifier pointed at someone else's service. A status poll is one
+#: indexed read of a local table. It still needs a ceiling, but not that one.
+#:
+#: 1200/hour is one poll every 3 s sustained. Real usage cannot approach it:
+#: 20 jobs/hour (8) at one concurrent job per IP, each ~20 s, is about 200
+#: polls.
+POLL_LIMIT = int(os.getenv("BHOOMI_POLL_LIMIT", "1200"))
+
 _limiter: RateLimiter = SlidingWindowLimiter()
 _job_limiter: RateLimiter = SlidingWindowLimiter(limit=JOB_LIMIT)
+_poll_limiter: RateLimiter = SlidingWindowLimiter(limit=POLL_LIMIT)
 
 
 def set_job_limiter(limiter: RateLimiter) -> None:
@@ -130,6 +148,24 @@ def set_job_limiter(limiter: RateLimiter) -> None:
 
 def get_job_limiter() -> RateLimiter:
     return _job_limiter
+
+
+def set_poll_limiter(limiter: RateLimiter) -> None:
+    global _poll_limiter
+    _poll_limiter = limiter
+
+
+def get_poll_limiter() -> RateLimiter:
+    return _poll_limiter
+
+
+def is_poll(request: Request) -> bool:
+    """A read of job state: status, result, or the finished raster.
+
+    Reads only, and only under /api/v1/jobs. `POST` to the same prefix is a
+    submission and keeps the search budget on top of its own 20/hour.
+    """
+    return request.method == "GET" and request.url.path.startswith("/api/v1/jobs")
 
 #: Monitoring must never be throttled -- a health check that starts returning
 #: 429 reads as an outage and orchestrators restart containers over it.
@@ -150,8 +186,12 @@ async def rate_limit_middleware(request: Request, call_next):
     if request.url.path in EXEMPT_PATHS or request.method == "OPTIONS":
         return await call_next(request)
 
+    polling = is_poll(request)
+    limiter = _poll_limiter if polling else _limiter
+    limit = POLL_LIMIT if polling else SEARCH_LIMIT
+
     key = client_key(request)
-    allowed, retry_after = _limiter.check(key)
+    allowed, retry_after = limiter.check(key)
     if not allowed:
         logger.warning("rate limit hit by %s on %s", key, request.url.path)
         return JSONResponse(
@@ -160,7 +200,7 @@ async def rate_limit_middleware(request: Request, call_next):
             content={
                 "code": "rate_limited",
                 "message": (
-                    f"Too many requests. The limit is {SEARCH_LIMIT} per hour. "
+                    f"Too many requests. The limit is {limit} per hour. "
                     f"Try again in {retry_after} seconds."
                 ),
                 "retry_after": retry_after,

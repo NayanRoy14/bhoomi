@@ -79,8 +79,18 @@ MIN_SAMPLE_PIXELS = 10_000
 #: wrong side of the line, including S2C_45QXF_20260227_0_L2A at 0.976% --
 #: which then produced 93% negative reflectance and a median NDVI of +1.703.
 #:
-#: 4 costs ~7 s against ~0.5 s at 16, paid once per scene ever and cached
-#: (PLAN.md 8). Correctness is worth more than six seconds paid once.
+#: The cost, measured in the worker container against a warm connection:
+#: decimation 4 is ~11 s, 8 is ~2.2 s, 16 is ~0.6 s. 8 classifies all nine
+#: measured scenes correctly too, but on 0.21 pp of margin against 4's ~0.93 pp.
+#: This is the highest-risk decision in the project -- a misread produces
+#: confidently wrong output rather than a visible failure -- and the cost is
+#: paid once per scene ever into a cache now shared by every worker (PLAN.md 6).
+#: Nine seconds, once, is worth twice the margin.
+#:
+#: Cold connections are much slower and much noisier: an unwarmed read at 4 has
+#: been seen at 159 s, and a first job at 65 s end to end. That is network
+#: variance, not the steady state, but it is why the first job after a
+#: container starts feels slow.
 DEFAULT_DECIMATION = 4
 
 

@@ -42,6 +42,8 @@ interface Props {
   scenes: Scene[];
   selectedSceneId: string | null;
   onSelectScene: (id: string | null) => void;
+  /** [west, south, east, north] of a finished raster, or null. */
+  outputBounds: number[] | null;
 }
 
 export default function MapView({
@@ -52,6 +54,7 @@ export default function MapView({
   scenes,
   selectedSceneId,
   onSelectScene,
+  outputBounds,
 }: Props) {
   const container = useRef<HTMLDivElement>(null);
   const map = useRef<MapLibreMap | null>(null);
@@ -115,6 +118,28 @@ export default function MapView({
         type: "line",
         source: "aoi",
         paint: { "line-color": "#16a34a", "line-width": 2.5 },
+      });
+
+      // The extent of a finished raster. An outline, not the pixels: rendering
+      // those needs a tile server (PLAN.md 11). Drawn anyway because the
+      // snapped output grid is slightly larger than the drawn AOI, and seeing
+      // that is the difference between trusting the result and guessing.
+      m.addSource("output", { type: "geojson", data: EMPTY });
+      m.addLayer({
+        id: "output-fill",
+        type: "fill",
+        source: "output",
+        paint: { "fill-color": "#a855f7", "fill-opacity": 0.12 },
+      });
+      m.addLayer({
+        id: "output-line",
+        type: "line",
+        source: "output",
+        paint: {
+          "line-color": "#a855f7",
+          "line-width": 2,
+          "line-dasharray": [3, 2],
+        },
       });
 
       m.addSource("aoi-vertices", { type: "geojson", data: EMPTY });
@@ -279,6 +304,29 @@ export default function MapView({
       })),
     });
   }, [scenes, selectedSceneId, ready]);
+
+  useEffect(() => {
+    const m = map.current;
+    if (!m || !ready) return;
+    const source = m.getSource("output") as maplibregl.GeoJSONSource | undefined;
+    if (!source) return;
+
+    if (!outputBounds || outputBounds.length !== 4) {
+      source.setData(EMPTY);
+      return;
+    }
+    const [west, south, east, north] = outputBounds;
+    source.setData({
+      type: "Feature",
+      properties: {},
+      geometry: {
+        type: "Polygon",
+        coordinates: [[
+          [west, south], [east, south], [east, north], [west, north], [west, south],
+        ]],
+      },
+    });
+  }, [outputBounds, ready]);
 
   return (
     <div className="map-wrap">

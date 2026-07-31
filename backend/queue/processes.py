@@ -50,9 +50,20 @@ FIXED_SECONDS = 3.2
 SECONDS_PER_MPIXEL = 2.8
 
 #: Detecting the BOA offset reads a decimated overview of the full tile (8).
-#: Only paid once per scene ever, but a first-time estimate that omits it is
-#: wrong by more than a third on a small AOI.
-OFFSET_DETECTION_SECONDS = 6.0
+#: Only paid once per scene ever -- and the cache is shared, so it is once per
+#: scene across every worker -- but a first-time estimate that omits it is
+#: wrong by several times over on a small AOI.
+#:
+#: 11 s, measured in the worker container against a warm connection at the
+#: decimation the detector now uses (harmonize.DEFAULT_DECIMATION = 4). The old
+#: 6 s belonged to decimation 32, which was the sampling that misclassified
+#: scenes (5.3.1).
+#:
+#: A cold connection costs far more -- a first job after the container starts
+#: has been seen at 65 s end to end -- so this is the steady state, not a
+#: worst case. `estimated_seconds` is advisory, and the status endpoint is what
+#: tells the truth while a job runs.
+OFFSET_DETECTION_SECONDS = 11.0
 
 #: PLAN.md 6: anonymous job outputs expire after 30 days. Demo outputs are
 #: pinned by setting this to None on the row afterwards.

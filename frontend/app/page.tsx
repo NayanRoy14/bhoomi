@@ -3,9 +3,17 @@
 import dynamic from "next/dynamic";
 import { useEffect, useState } from "react";
 
+import AnalysisPanel from "@/components/AnalysisPanel";
 import SceneList from "@/components/SceneList";
 import SearchPanel from "@/components/SearchPanel";
-import { ApiError, api, type Health, type Polygon, type Scene } from "@/lib/api";
+import {
+  ApiError,
+  api,
+  type Health,
+  type Output,
+  type Polygon,
+  type Scene,
+} from "@/lib/api";
 
 // MapLibre touches `window` at import time, so it cannot be server-rendered.
 const MapView = dynamic(() => import("@/components/MapView"), {
@@ -27,6 +35,9 @@ export default function Page() {
   const [searching, setSearching] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [health, setHealth] = useState<Health | null>(null);
+  const [output, setOutput] = useState<Output | null>(null);
+
+  const selectedScene = scenes.find((s) => s.id === selectedId) ?? null;
 
   useEffect(() => {
     api.health().then(setHealth).catch(() => setHealth(null));
@@ -37,6 +48,7 @@ export default function Page() {
     setSearching(true);
     setError(null);
     setSelectedId(null);
+    setOutput(null);
     try {
       const result = await api.searchScenes({
         aoi,
@@ -74,6 +86,7 @@ export default function Page() {
             setScenes([]);
             setAreaKm2(null);
             setSelectedId(null);
+            setOutput(null);
           }}
           startDate={startDate}
           endDate={endDate}
@@ -90,9 +103,16 @@ export default function Page() {
         <SceneList
           scenes={scenes}
           selectedId={selectedId}
-          onSelect={setSelectedId}
+          onSelect={(id) => {
+            setSelectedId(id);
+            // A result belongs to the scene it came from; keeping it visible
+            // after switching scenes would attach it to the wrong one.
+            setOutput(null);
+          }}
           areaKm2={areaKm2}
         />
+
+        <AnalysisPanel aoi={aoi} scene={selectedScene} onOutput={setOutput} />
 
         <footer className="foot">
           {health ? (
@@ -103,10 +123,20 @@ export default function Page() {
             <span className="warn">API unreachable</span>
           )}
           <br />
+          {health?.workers !== null && health?.workers !== undefined && (
+            <>
+              <span className="muted">
+                {health.workers} worker{health.workers === 1 ? "" : "s"}
+                {health.queue_depth !== null && ` · ${health.queue_depth} queued`}
+              </span>
+              <br />
+            </>
+          )}
           <span className="muted">Contains modified Copernicus Sentinel data</span>
           <br />
           <span className="muted small">
-            Processing arrives in January — this release finds scenes.
+            Results download as Cloud-Optimized GeoTIFF. Map preview needs the tile
+            server, which is not built yet.
           </span>
         </footer>
       </aside>
@@ -119,6 +149,7 @@ export default function Page() {
         scenes={scenes}
         selectedSceneId={selectedId}
         onSelectScene={setSelectedId}
+        outputBounds={output?.bounds ?? null}
       />
     </main>
   );
