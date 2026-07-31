@@ -85,10 +85,8 @@ class TestProcessRegistry:
         for name in ("ndvi", "ndwi", "ndbi"):
             assert processes.get(name) is not None
 
-    def test_change_is_not_registered_yet(self):
-        """Two-date differencing is February (PLAN.md 11); `pipeline` has it,
-        nothing exposes it."""
-        assert processes.get("change") is None
+    def test_change_is_registered_and_takes_two_scenes(self):
+        assert processes.get("change").scene_count == 2
 
     def test_unknown_process_is_none_not_an_error(self):
         assert processes.get("nonsense") is None
@@ -444,6 +442,34 @@ class TestSubmission:
         resp = submit(api, process="ndvi")
         assert resp.status_code == 202
         assert resp.json()["estimated_seconds"] == 21
+
+    def test_change_requires_two_scenes(self, api):
+        resp = submit(api, process="change", scene_ids=[SCENE_ID])
+        assert resp.status_code == 400
+        assert resp.json()["detail"]["code"] == "wrong_scene_count"
+        assert resp.json()["detail"]["expected"] == 2
+
+    def test_change_refuses_the_same_scene_twice(self, api):
+        """A raster of zeros is a valid answer to an invalid question, and the
+        user would read it as "nothing changed"."""
+        resp = submit(api, process="change", scene_ids=[SCENE_ID, SCENE_ID])
+        assert resp.status_code == 400
+        assert resp.json()["detail"]["code"] == "duplicate_scenes"
+
+    def test_change_refuses_an_index_it_cannot_difference(self, api):
+        """5.4.4: enforce the index in the API, do not trust input."""
+        resp = submit(api, process="change", scene_ids=[SCENE_ID, "S2B_OTHER_L2A"],
+                      parameters={"index": "fake"})
+        assert resp.status_code == 400
+        assert resp.json()["detail"]["code"] == "unknown_index"
+        assert "ndvi" in resp.json()["detail"]["message"]
+
+    def test_change_rejects_the_process_name_as_an_index(self, api):
+        """`change` is a process, not something that can be differenced."""
+        resp = submit(api, process="change", scene_ids=[SCENE_ID, "S2B_OTHER_L2A"],
+                      parameters={"index": "change"})
+        assert resp.status_code == 400
+        assert resp.json()["detail"]["code"] == "unknown_index"
 
     def test_the_wrong_number_of_scenes_is_rejected(self, api):
         resp = submit(api, scene_ids=[SCENE_ID, SCENE_ID])

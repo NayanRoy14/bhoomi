@@ -64,15 +64,54 @@ def check_scene_compatibility(properties_a: dict, properties_b: dict) -> list[st
             "Sen2Cor version drift rather than change on the ground."
         )
 
-    month_a = str(properties_a.get("datetime", ""))[5:7]
-    month_b = str(properties_b.get("datetime", ""))[5:7]
-    if month_a and month_b and month_a != month_b:
+    separation = _seasonal_separation_days(properties_a, properties_b)
+    if separation is not None and separation > SEASONAL_TOLERANCE_DAYS:
         warnings.append(
-            f"Acquisitions are from different months ({month_a} vs {month_b}). "
-            "Seasonal phenology may dominate the result."
+            f"Acquisitions are {separation} days apart in the year. Seasonal "
+            "phenology may dominate the result; prefer a pair from the same "
+            "part of the year."
         )
 
     return warnings
+
+
+#: How far apart in the *year* two acquisitions may sit before phenology is a
+#: serious confound. Crops and canopy move little over three weeks and a great
+#: deal over a season.
+#:
+#: Tighter than 5.4.4's "same month across years" on purpose: a same-month pair
+#: can still be 1 March against 31 March, which is a full month of growth. D11
+#: chose its demo pair at six days, so the plan's own working standard is much
+#: closer than a month.
+SEASONAL_TOLERANCE_DAYS = 21
+
+
+def _seasonal_separation_days(properties_a: dict, properties_b: dict) -> int | None:
+    """Distance between two acquisitions in day-of-year, ignoring the year.
+
+    Day-of-year, not calendar month, because the month is a crude proxy that is
+    wrong in both directions: 27 February and 10 March are eleven days apart
+    and would warn, while 1 March and 31 March are thirty days apart and would
+    not. PLAN.md D11 already reasons this way -- it justifies the demo pair as
+    "six days apart in day-of-year" -- so the check now measures what the plan
+    was actually arguing about.
+
+    Circular, so 31 December and 1 January are one day apart rather than 364.
+    """
+    from datetime import datetime
+
+    def day_of_year(properties: dict) -> int | None:
+        raw = str(properties.get("datetime") or "")[:10]
+        try:
+            return datetime.strptime(raw, "%Y-%m-%d").timetuple().tm_yday
+        except ValueError:
+            return None
+
+    a, b = day_of_year(properties_a), day_of_year(properties_b)
+    if a is None or b is None:
+        return None
+    gap = abs(a - b)
+    return min(gap, 365 - gap)
 
 
 def difference(

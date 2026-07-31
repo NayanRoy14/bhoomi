@@ -35,16 +35,16 @@ class TestDifference:
             BASE_05, dict(BASE_05))
         assert warnings == []
 
-    def test_different_months_warn_about_seasonality(self):
+    def test_opposite_seasons_warn_about_phenology(self):
         _, warnings = change.difference(
             np.zeros((2, 2), np.float32), np.zeros((2, 2), np.float32),
             BASE_05, dict(BASE_05, datetime="2026-09-04T04:46:54Z"))
-        assert any("different months" in w for w in warnings)
+        assert any("apart in the year" in w for w in warnings)
 
     def test_demo_pair_is_compatible(self):
-        """2020-03-10 vs 2026-03-04: same month, both baseline 05.x."""
+        """2020-03-10 vs 2026-03-04: six days apart in day-of-year (D11)."""
         warnings = change.check_scene_compatibility(BASE_05, BASE_0512)
-        assert not any("different months" in w for w in warnings)
+        assert not any("apart in the year" in w for w in warnings)
 
 
 class TestChangeStats:
@@ -93,3 +93,43 @@ class TestGrid:
         """Determinism is what makes two dates comparable."""
         aoi = (88.35, 22.55, 88.52, 22.68)
         assert grid_for_aoi(aoi, 10.0) == grid_for_aoi(aoi, 10.0)
+
+class TestSeasonalSeparation:
+    """PLAN.md 5.4.4's confound, measured in day-of-year rather than by month.
+
+    The month name is a crude proxy that is wrong both ways: 27 Feb and 10 Mar
+    are eleven days apart and used to warn, while 1 Mar and 31 Mar are thirty
+    days apart and did not. D11 justifies the demo pair as "six days apart in
+    day-of-year", so that is what the check measures.
+    """
+
+    @staticmethod
+    def _props(date, baseline="05.00"):
+        return {"datetime": f"{date}T04:00:00Z", "s2:processing_baseline": baseline}
+
+    def _seasonal(self, a, b):
+        return [w for w in change.check_scene_compatibility(self._props(a), self._props(b))
+                if "apart in the year" in w]
+
+    def test_a_near_anniversary_does_not_warn(self):
+        """The real case that exposed this: 11 days apart, across a month
+        boundary, phenologically close."""
+        assert self._seasonal("2020-03-10", "2026-02-27") == []
+
+    def test_the_demo_pair_does_not_warn(self):
+        """D11: six days apart in day-of-year."""
+        assert self._seasonal("2020-03-10", "2026-03-04") == []
+
+    def test_a_month_apart_within_one_month_name_does_warn(self):
+        """1 Mar vs 31 Mar shares a month and is a whole month apart."""
+        assert self._seasonal("2020-03-01", "2026-03-31") != []
+
+    def test_opposite_seasons_warn(self):
+        assert self._seasonal("2020-03-10", "2026-09-10") != []
+
+    def test_the_year_wraps(self):
+        """31 Dec and 1 Jan are one day apart, not 364."""
+        assert self._seasonal("2020-12-31", "2026-01-01") == []
+
+    def test_an_unparseable_date_does_not_invent_a_warning(self):
+        assert self._seasonal("not-a-date", "2026-03-04") == []

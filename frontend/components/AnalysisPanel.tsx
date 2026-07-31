@@ -34,12 +34,32 @@ const DESCRIPTIONS: Record<string, string> = {
   ndvi: "Vegetation. (NIR − Red) / (NIR + Red), 10 m.",
   ndwi: "Water. (Green − NIR) / (Green + NIR), 10 m.",
   ndbi: "Built-up. (SWIR − NIR) / (SWIR + NIR), 20 m.",
+  change: "Difference between two dates: later − earlier.",
   fake: "Queue check. Sleeps ten seconds and produces no raster.",
 };
+
+/** Processes needing a second scene, and how many in total. */
+const SCENE_COUNT: Record<string, number> = { change: 2 };
+
+const CHANGEABLE = ["ndvi", "ndwi", "ndbi"];
+
+function sceneCount(process: string): number {
+  return SCENE_COUNT[process] ?? 1;
+}
+
+function formatDate(iso: string): string {
+  return new Date(iso).toLocaleDateString(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  });
+}
 
 interface Props {
   aoi: Polygon | null;
   scene: Scene | null;
+  /** Every scene from the search, so change detection can pick its second date. */
+  scenes: Scene[];
   onOutput: (output: Output | null) => void;
   opacity: number;
   onOpacity: (value: number) => void;
@@ -48,11 +68,14 @@ interface Props {
 export default function AnalysisPanel({
   aoi,
   scene,
+  scenes,
   onOutput,
   opacity,
   onOpacity,
 }: Props) {
   const [process, setProcess] = useState<string>("ndvi");
+  const [compareId, setCompareId] = useState<string | null>(null);
+  const [index, setIndex] = useState<string>("ndvi");
   const [job, setJob] = useState<Job | null>(null);
   const [output, setOutput] = useState<Output | null>(null);
   const [estimate, setEstimate] = useState<number | null>(null);
@@ -70,19 +93,68 @@ export default function AnalysisPanel({
   }, []);
   useEffect(() => stopPolling, [stopPolling]);
 
+  // Change is offered whenever the selected scene supports any index, since it
+  // differences one; the per-scene list only names the single-scene processes.
   const available = scene?.available_processes ?? [];
+  const offered = available.length > 0 ? [...available, "change"] : available;
+
+  const needsTwo = sceneCount(process) === 2;
+  // Only scenes that fully cover the AOI can be the second date, and a scene
+  // cannot be differenced against itself.
+  const candidates = scenes.filter(
+    (s) => s.id !== scene?.id && s.aoi_coverage >= 0.999,
+  );
+  const compare = candidates.find((s) => s.id === compareId) ?? null;
+
   const partial = scene !== null && scene.aoi_coverage < 0.999;
   const canSubmit =
-    aoi !== null && scene !== null && !partial && !submitting && !isRunning(job);
+    aoi !== null &&
+    scene !== null &&
+    !partial &&
+    !submitting &&
+    !isRunning(job) &&
+    (!needsTwo || compare !== null);
+
+  // A baseline mismatch is not fatal -- PLAN.md 5.3 asks the API to flag it,
+  // not block it -- but the user should see it before spending a job, because
+  // part of the "change" would be Sen2Cor version drift rather than ground.
+  const baselineMismatch =
+    needsTwo &&
+    compare !== null &&
+    scene !== null &&
+    scene.processing_baseline !== null &&
+    compare.processing_baseline !== null &&
+    scene.processing_baseline !== compare.processing_baseline;
+
+  // Same month across years keeps phenology comparable (5.4.4); a March/September
+  // pair measures the season as much as the land.
+  const seasonalGap =
+    needsTwo && compare !== null && scene !== null
+      ? Math.abs(
+          ((new Date(scene.acquired_at).getMonth() -
+            new Date(compare.acquired_at).getMonth() +
+            18) %
+            12) -
+            6,
+        )
+      : 0;
 
   // A scene that cannot run the selected process should not leave a stale
   // selection in the dropdown -- the submit would fail server-side for a
   // reason the user never chose.
   useEffect(() => {
-    if (available.length > 0 && !available.includes(process)) {
-      setProcess(available[0]);
+    if (offered.length > 0 && !offered.includes(process)) {
+      setProcess(offered[0]);
     }
-  }, [available, process]);
+  }, [offered, process]);
+
+  // The second date belongs to the search that produced it. Keeping a stale id
+  // would submit a scene the user can no longer see in the list.
+  useEffect(() => {
+    if (compareId && !candidates.some((s) => s.id === compareId)) {
+      setCompareId(null);
+    }
+  }, [candidates, compareId]);
 
   function reset() {
     stopPolling();
@@ -117,8 +189,12 @@ export default function AnalysisPanel({
     try {
       const created = await api.createJob({
         process,
-        scene_ids: [scene.id],
+        // Chronological order is the server's job -- `compute_change` sorts by
+        // acquisition time, so a pair submitted either way round gives the same
+        // sign rather than a flipped one.
+        scene_ids: needsTwo && compare ? [compare.id, scene.id] : [scene.id],
         aoi,
+        parameters: needsTwo ? { index } : {},
       });
       setEstimate(created.estimated_seconds);
       setJob({
@@ -174,7 +250,7 @@ export default function AnalysisPanel({
           onChange={(e) => setProcess(e.target.value)}
           disabled={isRunning(job)}
         >
-          {available.map((name) => (
+          {offered.map((name) => (
             <option key={name} value={name}>
               {name.toUpperCase()}
             </option>
@@ -182,6 +258,73 @@ export default function AnalysisPanel({
         </select>
       </label>
       <p className="muted small">{DESCRIPTIONS[process] ?? ""}</p>
+
+      {needsTwo && (
+        <>
+          <label className="field">
+            <span>Index to difference</span>
+            <select
+              value={index}
+              onChange={(e) => setIndex(e.target.value)}
+              disabled={isRunning(job)}
+            >
+              {CHANGEABLE.filter((i) => available.includes(i)).map((i) => (
+                <option key={i} value={i}>
+                  {i.toUpperCase()}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="field">
+            <span>Compare against</span>
+            <select
+              value={compareId ?? ""}
+              onChange={(e) => setCompareId(e.target.value || null)}
+              disabled={isRunning(job)}
+            >
+              <option value="">Pick a second date…</option>
+              {candidates.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {formatDate(s.acquired_at)}
+                  {s.cloud_cover !== null && ` — ${s.cloud_cover.toFixed(1)}% cloud`}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          {candidates.length === 0 && (
+            <p className="warn small">
+              No other scene in this search covers your whole area. Widen the date
+              range to find a second date.
+            </p>
+          )}
+
+          {compare && scene && (
+            <p className="muted small">
+              {formatDate(compare.acquired_at)} → {formatDate(scene.acquired_at)}.
+              Green is a rise, brown a fall.
+            </p>
+          )}
+
+          {baselineMismatch && (
+            <p className="warn small">
+              These two scenes have different processing baselines
+              ({compare?.processing_baseline} and {scene?.processing_baseline}).
+              Some of the difference will be Sen2Cor version drift rather than
+              change on the ground. The job will still run and the result says so.
+            </p>
+          )}
+
+          {seasonalGap >= 3 && (
+            <p className="warn small">
+              These dates are about {seasonalGap} months apart in the year. Vegetation
+              differs between seasons for reasons that are not land-use change — a
+              pair from the same month in different years compares better.
+            </p>
+          )}
+        </>
+      )}
 
       {partial ? (
         <p className="warn small">

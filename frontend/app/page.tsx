@@ -118,6 +118,7 @@ export default function Page() {
         <AnalysisPanel
           aoi={aoi}
           scene={selectedScene}
+          scenes={scenes}
           onOutput={setOutput}
           opacity={opacity}
           onOpacity={setOpacity}

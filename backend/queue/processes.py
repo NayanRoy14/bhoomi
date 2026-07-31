@@ -126,12 +126,18 @@ def _bounds_wgs84(grid) -> dict:
     }
 
 
-def _publish(result, job: Job, index: str) -> OutputSpec:
+def _publish(result, job: Job, *, output_type: str, stats: dict,
+             valid_fraction: float, warnings: list[str]) -> OutputSpec:
     """Write the COG, move it into storage, and describe it.
 
     Written to a scratch file first because rasterio writes to a path, and COG
     creation is not something to do inside the storage backend -- with S3 the
     two are unavoidably separate steps anyway.
+
+    `stats` and `valid_fraction` are passed rather than read off `result`,
+    because an index and a change raster summarise themselves differently: an
+    index reports a distribution, a change raster reports loss against gain
+    (§5.4.4). Only `write` and `grid` are common to both.
     """
     key = storage.key_for(str(job.id))
     backend = storage.get_storage()
@@ -144,16 +150,16 @@ def _publish(result, job: Job, index: str) -> OutputSpec:
         size = backend.put(path, key)
 
     return OutputSpec(
-        output_type="index_raster",
+        output_type=output_type,
         cog_uri=backend.url_for(key) or storage.download_url(str(job.id)),
         bounds=_bounds_wgs84(result.grid),
         crs=str(result.grid.crs),
         resolution_m=result.grid.resolution,
         size_bytes=size,
-        valid_fraction=result.valid_fraction,
-        stats=result.stats(),
+        valid_fraction=valid_fraction,
+        stats=stats,
         expires_at=datetime.now(timezone.utc) + RETENTION,
-        warnings=list(result.warnings),
+        warnings=warnings,
     )
 
 
@@ -178,9 +184,75 @@ def _run_index(index: str) -> Callable[[Reporter, Job], list[OutputSpec]]:
             logger.warning("job %s: %s", job.id, warning)
 
         report(JobStatus.WRITING_COG)
-        return [_publish(result, job, index)]
+        return [_publish(result, job, output_type="index_raster",
+                         stats=result.stats(), valid_fraction=result.valid_fraction,
+                         warnings=list(result.warnings))]
 
     return run
+
+
+#: The index a change job differences when `parameters.index` says nothing.
+DEFAULT_CHANGE_INDEX = "ndvi"
+
+
+def _change_estimate(mpixels: float) -> float:
+    """Two dates: two index computations, and two scenes to measure."""
+    return 2 * (FIXED_SECONDS + SECONDS_PER_MPIXEL * mpixels + OFFSET_DETECTION_SECONDS)
+
+
+def _change_stats(stats) -> dict:
+    """`ChangeStats` as JSON for `outputs.stats` (§6) and 7.5.
+
+    §5.4.4 rule 3: report the loss/gain asymmetry *alongside* the mean, never
+    the mean alone. On the demo AOI the mean NDVI shift is only -0.027 while
+    9.73 % of pixels lost more than 0.2 and 3.26 % gained more than it -- the
+    mean understates a real change concentrated in a minority of pixels, and
+    the 3:1 ratio is what distinguishes it from noise, which moves both
+    directions roughly equally.
+    """
+    asymmetry = stats.asymmetry
+    return {
+        "mean": stats.mean,
+        "median": stats.median,
+        "loss_fraction": stats.loss_fraction,
+        "gain_fraction": stats.gain_fraction,
+        "threshold": stats.threshold,
+        # inf is not JSON; it means "loss with no gain at all to divide by".
+        "asymmetry": None if asymmetry == float("inf") else asymmetry,
+    }
+
+
+def _run_change(report: Reporter, job: Job) -> list[OutputSpec]:
+    """Difference one index across two dates (PLAN.md 5.4.4).
+
+    `pipeline.compute_change` does the work and already enforces what matters:
+    it orders the pair chronologically, derives one output grid from the AOI
+    and reprojects *both* scenes onto it rather than onto each other, unions
+    the masks, and returns compatibility warnings -- including the processing
+    baseline mismatch that §5.3 identified as partly measuring Sen2Cor version
+    drift rather than ground change.
+
+    A baseline mismatch warns rather than refuses. §5.3 asks the API to *flag*
+    it, and refusing would make whole year-pairs unusable for a confound the
+    user may reasonably accept once told.
+    """
+    index = str(job.parameters.get("index") or DEFAULT_CHANGE_INDEX)
+
+    report(JobStatus.SEARCHING)
+    earlier, later = (resolve_scene(scene_id) for scene_id in job.scene_ids[:2])
+
+    report(JobStatus.READING)
+    result = pipeline.compute_change(earlier, later, job.aoi, index)
+    report(JobStatus.PROCESSING)
+
+    for warning in result.warnings:
+        logger.warning("job %s: %s", job.id, warning)
+
+    report(JobStatus.WRITING_COG)
+    return [_publish(result, job, output_type="change_raster",
+                     stats=_change_stats(result.stats),
+                     valid_fraction=result.stats.valid_fraction,
+                     warnings=list(result.warnings))]
 
 
 def _fake_estimate(mpixels: float) -> float:
@@ -235,6 +307,25 @@ for _name, _description in _INDEX_DESCRIPTIONS.items():
         estimate_seconds=_index_estimate,
         run=_run_index(_name),
     )
+
+REGISTRY["change"] = ProcessSpec(
+    name="change",
+    #: 7.3: exactly two, chronological. `pipeline.compute_change` sorts them by
+    #: acquisition time anyway, so a user who submits them backwards gets the
+    #: right answer rather than a sign-flipped one.
+    scene_count=2,
+    description=(
+        "Two-date difference of an index: INDEX(later) - INDEX(earlier). "
+        "`parameters.index` selects which, default ndvi."
+    ),
+    estimate_seconds=_change_estimate,
+    run=_run_change,
+)
+
+#: What `parameters.index` may name. Change differences an index, so the set is
+#: the indices -- not the process registry, which also contains `change` itself
+#: and `fake`.
+CHANGEABLE_INDICES = tuple(sorted(_INDEX_DESCRIPTIONS))
 
 
 def get(name: str) -> ProcessSpec | None:

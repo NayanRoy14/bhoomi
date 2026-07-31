@@ -1592,7 +1592,8 @@ watch progress → see the processed raster on the map. End to end, by a strange
 | `POST /jobs`, `GET /jobs/{id}`, `GET /jobs/{id}/result` | ✅ |
 | §7.3 rejections, §8 caps (AOI, scene count, concurrency, 20/hour) | ✅ |
 | **NDVI / NDWI / NDBI as real processes, COG out** | ✅ — see below |
-| Object storage (D14 — R2; **implemented**, awaiting a real bucket), change detection | partly |
+| Object storage (D14 — R2; **implemented**, awaiting a real bucket) | partly |
+| **Two-date change detection** | ✅ — see below |
 
 The only registered process is **`fake`**: it sleeps ~10 s, walks all five stages, and produces
 no raster. Submitting `ndvi` today returns `400 Unknown process 'ndvi'. Available: fake.` That
@@ -1729,6 +1730,53 @@ ask matplotlib what `rdylgn` looks like. That is a second hand-mirrored contract
 
 **One bug:** the image serves on port **80** under gunicorn, not 8000 like the backend, so the
 first mapping produced a container that was up and unreachable.
+
+### Progress, 2026-07-31 — two-date change detection
+
+`change` is a registered process taking two scenes and `parameters.index` (§7.3). Verified
+against live Sentinel-2 over Rajarhat, 2020-03-10 → 2026-02-27:
+
+```
+mean -0.0878   median -0.0745   valid 0.9997
+loss 19.19 %   gain 2.07 %   ->  asymmetry 9.3 : 1   (threshold 0.2)
+COG  change_raster, EPSG:32645 @ 10 m, valid, tags carry BOTH baselines
+```
+
+**That number is not a finding, and the output says so.** The pair spans processing baselines
+05.00 and 05.12, so §5.3 applies directly: part of that 9:1 is Sen2Cor version drift rather than
+ground. The job ran, warned, and wrote the warning into `BHOOMI_WARNINGS` and both baselines into
+`BHOOMI_PROCESSING_BASELINES`. §5.4.4's own measured figure — 3:1 on a *baseline-matched* pair —
+remains the defensible one. A clean headline needs a matched pair, which is exactly what D11
+picked and why.
+
+**A mismatch warns rather than refuses**, per §5.3's "flag the mismatch". Refusing would make
+whole year-pairs unusable for a confound a user may reasonably accept once told. The frontend
+also warns *before* the job is spent, from the two scenes' baselines, so nobody discovers it
+after waiting.
+
+`_change_stats` reports loss and gain fractions and their ratio beside the mean, per §5.4.4
+rule 3 — and maps an infinite ratio (loss with no gain at all) to null, because `inf` is not JSON
+and the row would fail to insert.
+
+The API enforces what §5.4.4 says not to trust to input: exactly two scenes, **two different**
+scenes (differencing a scene with itself is zero everywhere — a valid answer to an invalid
+question, which a user would read as "nothing changed"), and an index that can actually be
+differenced.
+
+### The seasonality check was measuring the wrong thing
+
+Found by the first real change job warning when it should not have. `check_scene_compatibility`
+compared **calendar month names**, which is wrong in both directions: 27 February and 10 March
+are eleven days apart and warned, while 1 March and 31 March are thirty days apart and did not.
+
+D11 already reasons correctly — it justifies the demo pair as "six days apart in day-of-year" —
+so the plan's own working standard was never the month. The check now measures day-of-year
+distance, circular so 31 December and 1 January are one day apart rather than 364, with a
+tolerance of **21 days**: tighter than §5.4.4's "same month across years", because a same-month
+pair can still be a full month of growth.
+
+Same shape as §5.3.1's lesson, in miniature: a proxy stood in for the quantity actually being
+reasoned about, and it went unnoticed until real data crossed the boundary.
 
 **Three bugs, all found by using it rather than by testing it:**
 

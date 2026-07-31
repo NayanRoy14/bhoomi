@@ -22,12 +22,15 @@ const RAMPS: Record<string, string[]> = {
   ndwi: ["#b2182b", "#ef8a62", "#fddbc7", "#d1e5f0", "#67a9cf", "#2166ac"],
   // RdYlBu reversed. Blue = not built-up, red = built-up.
   ndbi: ["#313695", "#74add1", "#e0f3f8", "#fee090", "#f46d43", "#a50026"],
+  // BrBG, diverging about zero. Brown = the index fell, green = it rose.
+  change: ["#8c510a", "#d8b365", "#f6e8c3", "#c7eae5", "#5ab4ac", "#01665e"],
 };
 
 const MEANING: Record<string, [string, string]> = {
   ndvi: ["bare", "dense vegetation"],
   ndwi: ["dry", "water"],
   ndbi: ["not built-up", "built-up"],
+  change: ["decrease", "increase"],
 };
 
 export default function Legend({

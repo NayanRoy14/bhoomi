@@ -66,6 +66,26 @@ def wrong_scene_count(process: str, expected: int, got: int) -> BhoomiError:
         expected=expected, got=got)
 
 
+def unknown_index(index: str, available: list[str]) -> BhoomiError:
+    """`parameters.index` on a change job names something that is not an index."""
+    return BhoomiError(
+        400, "unknown_index",
+        f"Cannot difference {index!r}. Available indices: {', '.join(sorted(available))}.",
+        available=sorted(available))
+
+
+def duplicate_scenes(scene_id: str) -> BhoomiError:
+    """Two dates that are the same date. The difference would be all zeros.
+
+    Rejected rather than run: a raster of zeros is a valid output for an
+    invalid question, and the user would read it as "nothing changed".
+    """
+    return BhoomiError(
+        400, "duplicate_scenes",
+        f"Change detection needs two different scenes; {scene_id} was given twice. "
+        "Differencing a scene with itself is zero everywhere.")
+
+
 def jobs_unavailable(reason: str) -> BhoomiError:
     """503, not 500: the deployment is incomplete, the request was fine.
 

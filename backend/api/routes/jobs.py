@@ -57,6 +57,18 @@ def create_job(
         raise errors.wrong_scene_count(spec.name, spec.scene_count,
                                        len(request.scene_ids))
 
+    if spec.scene_count > 1 and len(set(request.scene_ids)) != len(request.scene_ids):
+        raise errors.duplicate_scenes(request.scene_ids[0])
+
+    # 5.4.4: "same index, same parameters on both sides -- enforce this in the
+    # API, do not trust input." The index is the only parameter a change job
+    # takes, and it applies to both dates by construction.
+    if spec.name == "change":
+        index = request.parameters.get("index", processes.DEFAULT_CHANGE_INDEX)
+        if index not in processes.CHANGEABLE_INDICES:
+            raise errors.unknown_index(str(index),
+                                       list(processes.CHANGEABLE_INDICES))
+
     aoi = request.aoi.as_dict()
     area_km2 = raster_utils.geometry_area_km2(aoi)
     if area_km2 > schemas.MAX_AOI_KM2:

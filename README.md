@@ -6,8 +6,8 @@ Bhoomi does not display pre-made map layers. It performs geospatial computation 
 returns a standards-compliant raster product that another GIS tool can consume.
 
 > ⚠️ **Early development.** Search and server-side processing work end to end — draw an area,
-> pick a scene, watch NDVI run, see it on the map, download the Cloud-Optimized GeoTIFF. Not yet
-> deployed publicly, and two-date change detection is still to come. See [Status](#status).
+> pick a scene, run an index or difference two dates, see it on the map, download the
+> Cloud-Optimized GeoTIFF. Not yet deployed publicly. See [Status](#status).
 > Development runs August 2026 – March 2027.
 
 ![NDVI change over New Town / Rajarhat, Kolkata, 2020 to 2026](docs/images/kolkata_change.png)
@@ -87,7 +87,7 @@ makes an OGC API – Processes async execution model natural rather than bolted 
 | NDVI / NDWI / NDBI as jobs, COG out | **Working** — verified on live Sentinel-2 |
 | TiTiler — results rendered on the map | **Working** — loopback only, see below |
 | Object storage — Cloudflare R2 | **Implemented**, verified against MinIO; needs a real bucket |
-| Two-date change detection | Not started |
+| Two-date change detection | **Working** — with baseline and seasonality warnings |
 | OGC API – Processes | Not started (February 2027) |
 
 A real NDVI over New Town / Rajarhat, submitted to the deployed stack and finished in 11 s:
@@ -100,7 +100,9 @@ COG     EPSG:32645, 10 m, tiled, deflate, overviews, nodata declared -- 940 KB
 
 The browser closes the loop: draw an area, search, pick a scene, pick a process, watch live
 progress, see the result rendered on the map with a legend and an opacity slider, and download
-the GeoTIFF.
+the GeoTIFF. Change detection adds a second date picker, and warns *before* the job is spent if
+the two scenes have different processing baselines or sit far apart in the year — both of which
+put drift or phenology into what would read as land-use change.
 
 Tiles are rescaled to a fixed [-1, 1] rather than stretched per image. A per-image stretch looks
 better and means less — two dates of the same area would get different scales, so comparing them
@@ -111,11 +113,11 @@ visually would measure the stretch rather than the ground.
 > arbitrary-file-read. Object storage removes this rather than mitigating it. Do not expose the
 > tile server before that lands.
 
-Outputs are written to local disk and served from `/api/v1/jobs/{id}/download` until the
-object-storage decision lands. `cog_uri` is a URL either way, so nothing downstream has to
-change when it does — but the worker and the API must currently share a filesystem.
+Outputs go to local disk by default and to object storage when `BHOOMI_S3_BUCKET` is set.
+`cog_uri` is a URL either way. On local disk the worker and the API must share a filesystem;
+object storage removes that constraint.
 
-316 tests. 70 of them need Postgres, Redis or an S3-compatible store, and skip without:
+345 tests. 70 of them need Postgres, Redis or an S3-compatible store, and skip without:
 
 ```bash
 docker run -d --rm --name bhoomi-test-pg -p 55432:5432 \
@@ -208,7 +210,7 @@ processing/   pure raster library -- no web dependencies, importable from a note
   cog.py          COG writing, validation, provenance tags
 examples/     worked analyses over Kolkata
 probes/       measurement scripts -- every empirical claim in PLAN.md is re-runnable
-tests/        316 tests; 70 need Postgres, Redis or S3, the rest need nothing
+tests/        345 tests; 70 need Postgres, Redis or S3, the rest need nothing
 docs/         data-source notes and the Bhoonidhi access request
 PLAN.md       the full project plan, with a live decisions register
 ```

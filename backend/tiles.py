@@ -46,6 +46,16 @@ RENDER: dict[str, tuple[str, tuple[float, float]]] = {
     "ndvi": ("rdylgn", (-1.0, 1.0)),
     "ndwi": ("rdbu", (-1.0, 1.0)),
     "ndbi": ("rdylbu_r", (-1.0, 1.0)),
+    # A difference of two indices, so mathematically it spans [-2, 2] -- but
+    # rendering that range puts every real change into a narrow washed-out band
+    # around the middle. §5.4.4 treats 0.2 as the threshold that matters, and
+    # [-1, 1] makes that plainly visible. Values beyond clip to the ends, which
+    # is rare and only affects extremes that are already unambiguous.
+    #
+    # BrBG is diverging about zero: brown for a fall, green for a rise. For
+    # NDVI that reads as vegetation lost and gained without a legend; for the
+    # others the legend supplies the noun.
+    "change": ("brbg", (-1.0, 1.0)),
 }
 
 DEFAULT_RENDER = ("viridis", (-1.0, 1.0))
