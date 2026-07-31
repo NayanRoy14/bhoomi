@@ -86,7 +86,8 @@ makes an OGC API – Processes async execution model natural rather than bolted 
 | Job queue — Redis + RQ, worker, state machine | **Working** |
 | NDVI / NDWI / NDBI as jobs, COG out | **Working** — verified on live Sentinel-2 |
 | TiTiler — results rendered on the map | **Working** — loopback only, see below |
-| Object storage, change detection | Not started |
+| Object storage — Cloudflare R2 | **Implemented**, verified against MinIO; needs a real bucket |
+| Two-date change detection | Not started |
 | OGC API – Processes | Not started (February 2027) |
 
 A real NDVI over New Town / Rajarhat, submitted to the deployed stack and finished in 11 s:
@@ -114,17 +115,25 @@ Outputs are written to local disk and served from `/api/v1/jobs/{id}/download` u
 object-storage decision lands. `cog_uri` is a URL either way, so nothing downstream has to
 change when it does — but the worker and the API must currently share a filesystem.
 
-301 tests. 64 of them need Postgres or Redis and skip without:
+316 tests. 70 of them need Postgres, Redis or an S3-compatible store, and skip without:
 
 ```bash
 docker run -d --rm --name bhoomi-test-pg -p 55432:5432 \
     -e POSTGRES_PASSWORD=testpw -e POSTGRES_DB=bhoomi_test postgis/postgis:16-3.4
 docker run -d --rm --name bhoomi-test-redis -p 56379:6379 redis:7-alpine
+docker run -d --rm --name bhoomi-test-minio -p 59000:9000 \
+    -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin \
+    quay.io/minio/minio server /data
 
 BHOOMI_TEST_DATABASE_URL=postgresql://postgres:testpw@localhost:55432/bhoomi_test \
 BHOOMI_TEST_REDIS_URL=redis://localhost:56379/1 \
+BHOOMI_TEST_S3_ENDPOINT=http://localhost:59000 \
     python -m pytest
 ```
+
+MinIO stands in for R2 there. That is not a compromise — R2 *is* the S3 API, which is why the
+backend is `S3Storage` rather than `R2Storage`, and why changing provider costs an endpoint
+rather than a rewrite. It does mean none of it proves anything about R2's own latency.
 
 ## Running it
 
@@ -181,7 +190,7 @@ backend/      FastAPI -- HTTP and nothing else
   api/errors.py   messages that say what to do about it
   db/             scenes cache, jobs and outputs, alembic migrations
   queue/          RQ setup, the process registry, the worker entry point
-  storage.py      where finished COGs live -- local disk now, Cloudflare R2 next
+  storage.py      where finished COGs live -- local disk, or any S3-compatible store
   tiles.py        TiTiler URL shape and the colour ramp per index
   resolve.py      scene id -> Scene, cache first, catalogue second
 cache.py      per-scene BOA-offset decisions -- JSON file, or the scenes table
@@ -199,7 +208,7 @@ processing/   pure raster library -- no web dependencies, importable from a note
   cog.py          COG writing, validation, provenance tags
 examples/     worked analyses over Kolkata
 probes/       measurement scripts -- every empirical claim in PLAN.md is re-runnable
-tests/        301 tests; 64 need Postgres or Redis, the rest need nothing
+tests/        316 tests; 70 need Postgres, Redis or S3, the rest need nothing
 docs/         data-source notes and the Bhoonidhi access request
 PLAN.md       the full project plan, with a live decisions register
 ```

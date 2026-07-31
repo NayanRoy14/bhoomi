@@ -1167,6 +1167,34 @@ front for tile reads, and the Protocol makes switching cheap. **Measure it once 
 exists** — a `probes/` script timing a windowed read of a 20 MB COG from the VPS — and reopen this
 if it is bad.
 
+### Implemented 2026-07-31, verified against MinIO
+
+`backend/storage.py` gained `S3Storage` — named for the API, not the vendor, because R2, S3,
+MinIO and B2 differ only by an endpoint and a key pair. `BHOOMI_S3_BUCKET` being set is what
+switches outputs off local disk, the same way `BHOOMI_DATABASE_URL` switches the scene cache: one
+setting to get wrong rather than two that can disagree.
+
+Verified end to end with **MinIO standing in for R2** — which is not a compromise, because R2 *is*
+the S3 API, and that is the whole reason D14 was safe to decide before benchmarking. A real NDVI
+job: the COG landed in the bucket (941,730 bytes) and **not** on the local volume, `/download`
+streamed it back byte-identical, TiTiler read it through `/vsis3/`, and the raster rendered in
+the browser with no console errors.
+
+**What that does not prove is anything about R2 itself** — latency, durability, or the free tier
+behaving as documented. Those need the account. The gap is narrow and named.
+
+Two details the S3 path forced:
+
+- **`url_for` returns None for a private bucket, deliberately.** A presigned URL satisfies
+  "fetchable" and then expires *inside* `outputs.cog_uri`, which lives 30 days (§6). So a private
+  bucket has no stable public URL, `cog_uri` falls back to the API's `/download`, and that route
+  streams the object through. Setting `BHOOMI_S3_PUBLIC_BASE_URL` (a bucket's public r2.dev
+  address or a custom domain) restores the direct URL and lets the tile server drop its
+  credentials entirely.
+- **botocore's default checksum behaviour breaks R2.** Recent versions send checksum trailers
+  that R2 rejects; `request_checksum_calculation="when_required"` keeps one client working
+  against R2, MinIO and S3 alike.
+
 ### What this unblocks, and one prerequisite
 
 Settling O4 is what makes the O3 deployment *safe*: §11 records that TiTiler is bound to
@@ -1564,7 +1592,7 @@ watch progress → see the processed raster on the map. End to end, by a strange
 | `POST /jobs`, `GET /jobs/{id}`, `GET /jobs/{id}/result` | ✅ |
 | §7.3 rejections, §8 caps (AOI, scene count, concurrency, 20/hour) | ✅ |
 | **NDVI / NDWI / NDBI as real processes, COG out** | ✅ — see below |
-| Object storage (D14 — R2, decided but not implemented), change detection | not started |
+| Object storage (D14 — R2; **implemented**, awaiting a real bucket), change detection | partly |
 
 The only registered process is **`fake`**: it sleeps ~10 s, walks all five stages, and produces
 no raster. Submitting `ndvi` today returns `400 Unknown process 'ndvi'. Available: fake.` That

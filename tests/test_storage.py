@@ -10,6 +10,7 @@ from __future__ import annotations
 import pytest
 
 from backend import storage
+from tests.conftest import needs_s3
 
 
 @pytest.fixture
@@ -117,3 +118,100 @@ class TestFactory:
 
     def test_local_storage_satisfies_the_protocol(self, local):
         assert isinstance(local, storage.Storage)
+
+
+# ------------------------------------------------ object storage (needs S3)
+
+class TestS3Configuration:
+    """No server needed: how the backend is selected and addressed."""
+
+    def test_a_bucket_switches_the_default_backend(self, monkeypatch):
+        monkeypatch.setenv("BHOOMI_S3_BUCKET", "bhoomi-outputs")
+        storage.set_storage(None)
+        try:
+            assert isinstance(storage.get_storage(), storage.S3Storage)
+        finally:
+            storage.set_storage(None)
+
+    def test_no_bucket_keeps_local_disk(self, monkeypatch):
+        monkeypatch.delenv("BHOOMI_S3_BUCKET", raising=False)
+        storage.set_storage(None)
+        try:
+            assert isinstance(storage.get_storage(), storage.LocalStorage)
+        finally:
+            storage.set_storage(None)
+
+    def test_a_bucket_is_required(self, monkeypatch):
+        monkeypatch.delenv("BHOOMI_S3_BUCKET", raising=False)
+        with pytest.raises(ValueError, match="BHOOMI_S3_BUCKET"):
+            storage.S3Storage()
+
+    def test_a_private_bucket_has_no_stable_url(self):
+        """A presigned one would expire inside a 30-day-lived cog_uri row."""
+        store = storage.S3Storage(bucket="b", public_base_url="")
+        assert store.url_for("a.tif") is None
+
+    def test_a_public_bucket_exposes_the_object_directly(self):
+        store = storage.S3Storage(bucket="b", public_base_url="https://cdn.test")
+        assert store.url_for("a.tif") == "https://cdn.test/a.tif"
+
+    def test_tiles_prefer_the_public_url_so_titiler_needs_no_keys(self):
+        store = storage.S3Storage(bucket="b", public_base_url="https://cdn.test/")
+        assert store.tile_source("a.tif") == "https://cdn.test/a.tif"
+
+    def test_a_private_bucket_falls_back_to_vsis3(self):
+        store = storage.S3Storage(bucket="bhoomi", public_base_url="")
+        assert store.tile_source("a.tif") == "/vsis3/bhoomi/a.tif"
+
+    def test_it_is_never_a_filesystem(self):
+        store = storage.S3Storage(bucket="b")
+        assert store.local_path("a.tif") is None
+        # No point staging near a destination reached over the network.
+        assert store.scratch_dir() is None
+
+    def test_it_satisfies_the_protocol(self):
+        assert isinstance(storage.S3Storage(bucket="b"), storage.Storage)
+
+
+@needs_s3
+class TestS3RoundTrip:
+    """Against a real S3-compatible server. See the s3_bucket fixture."""
+
+    def test_put_then_read_back(self, s3_bucket, tmp_path):
+        source = a_file(tmp_path, size=4096)
+        assert s3_bucket.put(source, "job.tif") == 4096
+        assert b"".join(s3_bucket.open_stream("job.tif")) == b"x" * 4096
+
+    def test_a_missing_object_streams_as_none(self, s3_bucket):
+        assert s3_bucket.open_stream("never-written.tif") is None
+
+    def test_a_real_cog_survives_the_round_trip(self, s3_bucket, tmp_path):
+        """Bytes, not just length: a corrupted upload would still have a size."""
+        import hashlib
+
+        source = tmp_path / "cog.tif"
+        source.write_bytes(bytes(range(256)) * 4096)   # 1 MB, non-uniform
+        digest = hashlib.sha256(source.read_bytes()).hexdigest()
+
+        s3_bucket.put(source, "cog.tif")
+        got = b"".join(s3_bucket.open_stream("cog.tif"))
+        assert hashlib.sha256(got).hexdigest() == digest
+
+    def test_put_leaves_the_source_for_its_caller_to_clean_up(self, s3_bucket, tmp_path):
+        """Unlike the local backend, which moves. _publish's TemporaryDirectory
+        removes it either way."""
+        source = a_file(tmp_path)
+        s3_bucket.put(source, "job.tif")
+        assert source.exists()
+
+    def test_delete(self, s3_bucket, tmp_path):
+        s3_bucket.put(a_file(tmp_path), "job.tif")
+        s3_bucket.delete("job.tif")
+        assert s3_bucket.open_stream("job.tif") is None
+
+    def test_an_oversized_output_is_refused_before_upload(self, s3_bucket, tmp_path,
+                                                          monkeypatch):
+        monkeypatch.setattr(storage, "MAX_OUTPUT_BYTES", 16)
+        with pytest.raises(storage.OutputTooLarge):
+            s3_bucket.put(a_file(tmp_path, size=64), "job.tif")
+        assert s3_bucket.open_stream("job.tif") is None

@@ -31,3 +31,8 @@ psycopg[binary]>=3.2
 # than a framework.
 rq>=2.0
 redis>=5.0
+
+# backend/storage.py -- object storage for outputs (PLAN.md D14: Cloudflare R2).
+# boto3 rather than an R2-specific client, because R2 is reached through the S3
+# API; the same code runs against S3 and MinIO with a different endpoint.
+boto3>=1.35

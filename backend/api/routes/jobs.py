@@ -12,7 +12,7 @@ import logging
 import uuid
 
 from fastapi import APIRouter, Depends, Request, Response
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, RedirectResponse, StreamingResponse
 
 from backend import storage, tiles
 from backend.api import errors, schemas
@@ -201,10 +201,11 @@ def job_result(job_id: str, jobs: JobStore = Depends(get_job_store)
 def job_download(job_id: str, jobs: JobStore = Depends(get_job_store)):
     """Serve the raster itself (PLAN.md 7.5).
 
-    Only meaningful for a storage backend with no public URL of its own -- the
-    local filesystem one. When O4 resolves and outputs live in R2, `url_for`
-    returns a real URL, `cog_uri` points straight at it, and this route
-    redirects rather than streaming bytes through the API.
+    Three routes to the same bytes, cheapest first: redirect to a public URL if
+    the backend has one, serve the file directly if it is on this filesystem,
+    otherwise stream it out of object storage. A private R2 bucket takes the
+    third -- it has no stable public URL by design, because a presigned one
+    would expire inside `outputs.cog_uri` (see `Storage.url_for`).
     """
     job = _load(job_id, jobs)
     if job.status is not JobStatus.COMPLETED:
@@ -212,20 +213,27 @@ def job_download(job_id: str, jobs: JobStore = Depends(get_job_store)):
 
     key = storage.key_for(str(job.id))
     backend = storage.get_storage()
+    filename = f"bhoomi_{job.process}_{job.id}.tif"
 
     direct = backend.url_for(key)
     if direct:
         return RedirectResponse(direct, status_code=307)
 
     path = backend.local_path(key)
-    if path is None:
-        # Completed, but the file is gone: past its 30-day retention (6), or
-        # the worker wrote to a filesystem this process cannot see. Saying so
-        # beats a 500, which would suggest retrying might help.
+    if path is not None:
+        return FileResponse(path, media_type="image/tiff", filename=filename)
+
+    stream = backend.open_stream(key)
+    if stream is None:
+        # Completed, but the object is gone: past its 30-day retention (6), or
+        # written somewhere this process cannot reach. Saying so beats a 500,
+        # which would suggest retrying might help.
         raise errors.output_missing(str(job.id))
 
-    return FileResponse(path, media_type="image/tiff",
-                        filename=f"bhoomi_{job.process}_{job.id}.tif")
+    return StreamingResponse(
+        stream, media_type="image/tiff",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 def _bounds_of(geometry: dict) -> tuple[float, float, float, float]:

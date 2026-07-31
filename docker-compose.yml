@@ -25,6 +25,14 @@ services:
       # Where TiTiler mounts the same volume, and where the browser reaches it.
       BHOOMI_TILE_ROOT: /app/outputs/jobs
       BHOOMI_TITILER_URL: ${BHOOMI_TITILER_URL:-http://localhost:8001}
+      # Object storage (PLAN.md D14). Empty bucket = local disk, which is the
+      # default until an R2 bucket exists.
+      BHOOMI_S3_BUCKET: ${BHOOMI_S3_BUCKET:-}
+      BHOOMI_S3_ENDPOINT: ${BHOOMI_S3_ENDPOINT:-}
+      BHOOMI_S3_ACCESS_KEY_ID: ${BHOOMI_S3_ACCESS_KEY_ID:-}
+      BHOOMI_S3_SECRET_ACCESS_KEY: ${BHOOMI_S3_SECRET_ACCESS_KEY:-}
+      BHOOMI_S3_REGION: ${BHOOMI_S3_REGION:-auto}
+      BHOOMI_S3_PUBLIC_BASE_URL: ${BHOOMI_S3_PUBLIC_BASE_URL:-}
     volumes:
       # The worker writes the COG, the API serves it. Shared because
       # LocalStorage is single-host by construction -- the constraint object
@@ -56,6 +64,14 @@ services:
       # The backend has already migrated by the time this starts; two
       # containers racing to create the same table is a real failure.
       BHOOMI_SKIP_MIGRATIONS: "1"
+      # Object storage (PLAN.md D14). Empty bucket = local disk, which is the
+      # default until an R2 bucket exists.
+      BHOOMI_S3_BUCKET: ${BHOOMI_S3_BUCKET:-}
+      BHOOMI_S3_ENDPOINT: ${BHOOMI_S3_ENDPOINT:-}
+      BHOOMI_S3_ACCESS_KEY_ID: ${BHOOMI_S3_ACCESS_KEY_ID:-}
+      BHOOMI_S3_SECRET_ACCESS_KEY: ${BHOOMI_S3_SECRET_ACCESS_KEY:-}
+      BHOOMI_S3_REGION: ${BHOOMI_S3_REGION:-auto}
+      BHOOMI_S3_PUBLIC_BASE_URL: ${BHOOMI_S3_PUBLIC_BASE_URL:-}
     volumes:
       - outputs-data:/app/outputs/jobs
     # PLAN.md 8 caps concurrent jobs at 2, and that cap is only meaningful if
@@ -91,6 +107,17 @@ services:
       VSI_CACHE_SIZE: "67108864"
       # The browser calls this directly, so CORS has to allow the frontend.
       TITILER_API_CORS_ORIGINS: ${BHOOMI_CORS_ORIGINS:-http://localhost:3000}
+      # GDAL reads /vsis3/ with these. Only needed for a PRIVATE bucket; with
+      # BHOOMI_S3_PUBLIC_BASE_URL set, tile_source hands over an https URL and
+      # TiTiler needs no credentials at all.
+      AWS_ACCESS_KEY_ID: ${BHOOMI_S3_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${BHOOMI_S3_SECRET_ACCESS_KEY:-}
+      AWS_S3_ENDPOINT: ${BHOOMI_S3_GDAL_ENDPOINT:-}
+      AWS_DEFAULT_REGION: ${BHOOMI_S3_REGION:-auto}
+      # GDAL wants the endpoint without a scheme and addresses buckets by path.
+      # AWS_HTTPS is YES for R2; NO only for a plaintext local S3 server.
+      AWS_HTTPS: ${BHOOMI_S3_GDAL_HTTPS:-YES}
+      AWS_VIRTUAL_HOSTING: "FALSE"
     volumes:
       # Read-only: the tile server has no business writing outputs.
       - outputs-data:/app/outputs/jobs:ro
