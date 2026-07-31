@@ -52,15 +52,16 @@ from dataclasses import dataclass
 
 from backend import storage
 from backend.db import get_engine
-from backend.db.jobs import JobStore
+
+# STALLED_AFTER_SECONDS is imported rather than redefined here, and that is not
+# tidiness. `count_active` already uses it to decide which jobs occupy a
+# submitter's slot (PLAN.md 8). If the reaper used a longer window than the
+# counter, a job between the two would be uncounted *and* unreaped -- invisible
+# to the cap and still sitting at `reading`, which is the exact condition the
+# reaper exists to clear.
+from backend.db.jobs import STALLED_AFTER_SECONDS, JobStore
 
 logger = logging.getLogger(__name__)
-
-#: How long a job may sit in an active state before the reaper fails it.
-#: Comfortably above BHOOMI_JOB_TIMEOUT (900 s on Render, 600 s by default) so
-#: that a job which is merely slow is never reaped out from under a worker that
-#: is still going to report on it properly.
-STALLED_AFTER_SECONDS = int(os.getenv("BHOOMI_STALLED_AFTER", "1800"))
 
 #: PLAN.md 6 and 14. Separate from output retention on purpose -- see
 #: `JobStore.purge_client_ips`.
