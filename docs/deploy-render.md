@@ -55,20 +55,46 @@ Render dashboard → **New** → **Blueprint** → select this repository. It re
 [`render.yaml`](../render.yaml) and proposes three services: `bhoomi-api`
 (Docker web service), `bhoomi` (static frontend) and `bhoomi-queue` (Key Value).
 
-Render will prompt for the four values marked `sync: false`. Two of them are
-URLs of services that do not exist yet, which is a chicken-and-egg you resolve
-by guessing correctly — Render's URLs are predictable from the service names:
+Render will prompt for the four values marked `sync: false`. Three of them are
+URLs of services that do not exist yet.
+
+> ⚠️ **Do not guess these, and do not assume the service names survive.**
+> `onrender.com` is one global namespace, so a taken name gets four random
+> characters appended: asking for `bhoomi` can yield `bhoomi-8t7g.onrender.com`.
+> There is no way to know in advance, and the failure is quiet — the API is
+> healthy and answers `curl` perfectly while the browser reports it as
+> unreachable, because the CORS preflight from an origin that is not on the
+> list is rejected before any of your code runs.
+>
+> Deploy the blueprint with placeholders, then **read each service's real URL
+> off its own service page** (it sits under the service name at the top) and
+> correct the variables in each Environment tab. Check *every* service. Getting
+> one right and assuming the other followed the same pattern is exactly how
+> this was got wrong the first time.
 
 | Variable | Service | Value |
 |---|---|---|
 | `BHOOMI_DATABASE_URL` | `bhoomi-api` | the Neon pooled string from step 1 |
-| `BHOOMI_PUBLIC_BASE_URL` | `bhoomi-api` | `https://bhoomi-api.onrender.com` |
-| `BHOOMI_CORS_ORIGINS` | `bhoomi-api` | `https://bhoomi.onrender.com` |
-| `NEXT_PUBLIC_API_URL` | `bhoomi` | `https://bhoomi-api.onrender.com` |
+| `BHOOMI_PUBLIC_BASE_URL` | `bhoomi-api` | the API service's own URL |
+| `BHOOMI_CORS_ORIGINS` | `bhoomi-api` | the **static site's** URL, exactly — scheme included, no trailing slash |
+| `NEXT_PUBLIC_API_URL` | `bhoomi` | the API service's URL |
 
-If Render appends a suffix because a name is taken, correct these afterwards in
-each service's Environment tab. **Changing `NEXT_PUBLIC_API_URL` requires a
-redeploy of the frontend, not a restart** — Next.js inlines it at build time.
+Changing `BHOOMI_CORS_ORIGINS` restarts the API, which takes about a minute.
+**Changing `NEXT_PUBLIC_API_URL` requires a redeploy of the frontend, not a
+restart** — Next.js inlines it at build time.
+
+To confirm CORS rather than trust it, ask the API what it will allow, using the
+frontend's origin:
+
+```bash
+curl -s -o /dev/null -D - -X OPTIONS https://<api>/api/v1/scenes/search \
+  -H 'Origin: https://<frontend>' \
+  -H 'Access-Control-Request-Method: POST' \
+  -H 'Access-Control-Request-Headers: content-type' | grep -i access-control-allow-origin
+```
+
+An `access-control-allow-origin` line echoing your frontend means the browser
+will work. No such line means it will not, however healthy `/health` looks.
 
 The first Docker build takes several minutes; rasterio's wheels are large.
 

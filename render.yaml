@@ -33,16 +33,30 @@ services:
     healthCheckPath: /health
     envVars:
       # ---- provided by you at deploy time -----------------------------
+      #
+      # The two URLs below cannot be filled in correctly before the services
+      # exist, and they must NOT be guessed from the names in this file.
+      # `onrender.com` is one global namespace: a taken name gets four random
+      # characters appended, so `bhoomi` can become `bhoomi-8t7g.onrender.com`.
+      # Deploy with placeholders, then read each service's real URL from its own
+      # service page and correct these. Check every service -- getting one right
+      # and assuming the other matched is how this went wrong the first time.
+      #
+      # The failure mode is quiet, which is why it deserves this much comment:
+      # a wrong CORS origin leaves the API healthy and answering curl while the
+      # browser calls it unreachable, because the preflight is rejected before
+      # any application code runs.
+      #
       # Neon's pooled connection string. See docs/deploy-render.md step 1.
       - key: BHOOMI_DATABASE_URL
         sync: false
-      # The static site's URL, e.g. https://bhoomi.onrender.com. Needed because
-      # the browser calls the API cross-origin here -- unlike the Docker Compose
-      # deployment, where Caddy puts both behind one host.
+      # The STATIC SITE's origin -- scheme included, no trailing slash. Needed
+      # because the browser calls the API cross-origin here, unlike the Docker
+      # Compose deployment where Caddy puts both behind one host.
       - key: BHOOMI_CORS_ORIGINS
         sync: false
-      # This service's own URL, e.g. https://bhoomi-api.onrender.com. It goes
-      # into outputs.cog_uri, so it must be what a client can reach.
+      # THIS service's own URL. It goes into outputs.cog_uri, so it must be
+      # what a client can actually reach.
       - key: BHOOMI_PUBLIC_BASE_URL
         sync: false
 
