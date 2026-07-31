@@ -33,9 +33,31 @@ built around:
     of the two AOIs gets which method alternates, so a systematic difference
     between the two window positions cancels too.
 
-Run it before changing how bands are read, and again after. Compare the median
-ratio and the per-site ratios; a real effect shows up in most sites, not in the
-median of four numbers that disagree in sign.
+  - **The first read of a scene pays for the connection.** The paired design
+    above then failed too, in a third way. Across 7 sites the method that ran
+    *second* was faster at 5 of them, usually by 10-20x: 140 s then 11 s at
+    Lucknow, 92 s then 7 s at Hyderabad, 167 s then 61 s at Jaipur. Two
+    non-overlapping windows miss each other in the GDAL block cache, which is
+    what they were for, but they do not miss each other's HTTPS connection to
+    the same S3 host. Warm-up is an order of magnitude; concurrency would be a
+    few percent.
+
+    Alternating which method goes first does not rescue it at n=7 -- it
+    scrambles the effect rather than cancelling it, which is why the paired
+    ratios came out spanning 0.07x to 4.76x with parallel "winning" 3 of 7.
+
+**So the honest state is that this probe has not answered its question**, and
+three designs have each failed differently: confounded by site, then by
+within-pair order. Do not read a speedup out of it without first checking that
+the first/second split reported below is small. From a connection like the one
+this was written on, it will not be.
+
+The warm-up effect is itself the useful finding, and it is not noise: a job on
+a long-lived worker that has already talked to S3 is much faster than these
+cold numbers suggest, which is why the deployed stack finishes an NDVI in 11 s
+where a cold laptop took 352 s.
+
+Run it before changing how bands are read, and again after.
 """
 
 from __future__ import annotations
@@ -133,11 +155,13 @@ def main() -> int:
 
     print(f"\n{len(cases)} sites, paired, {len(BANDS)} bands each, "
           f"{cases[0][2].pixel_count / 1e6:.2f} Mpx per band\n")
-    print(f"{'site':<12}{'scene':<28}{'seq s':>8}{'par s':>8}{'seq/par':>9}")
+    print(f"{'site':<12}{'scene':<28}{'seq s':>8}{'par s':>8}{'seq/par':>9}{'1st':>7}")
 
     ratios: list[float] = []
     seq_all: list[float] = []
     par_all: list[float] = []
+    firsts: list[float] = []
+    seconds: list[float] = []
     for index, (name, scene, left_grid, right_grid) in enumerate(cases):
         # Alternate which window each method gets, so any systematic difference
         # between the two positions cancels across sites instead of loading
@@ -157,7 +181,12 @@ def main() -> int:
         ratios.append(seq / par)
         seq_all.append(seq)
         par_all.append(par)
-        print(f"{name:<12}{scene.id:<28}{seq:8.1f}{par:8.1f}{seq / par:9.2f}")
+        # Which physically ran first, regardless of which method it was.
+        first, second = ((seq, par) if index % 2 else (par, seq))
+        firsts.append(first)
+        seconds.append(second)
+        print(f"{name:<12}{scene.id:<28}{seq:8.1f}{par:8.1f}{seq / par:9.2f}"
+              f"{'seq' if index % 2 else 'par':>7}")
 
     faster = sum(1 for r in ratios if r > 1.0)
     print(f"\n  sequential  median {statistics.median(seq_all):6.1f}s")
@@ -165,10 +194,27 @@ def main() -> int:
     print(f"\n  paired speedup: median {statistics.median(ratios):.2f}x, "
           f"range {min(ratios):.2f}-{max(ratios):.2f}")
     print(f"  parallel won on {faster}/{len(ratios)} sites")
-    print("\n  The per-site ratio is the result; the medians above it are context.\n"
-          "  A real effect shows up as most sites landing on the same side of\n"
-          "  1.00. Ratios straddling 1.00 mean no effect this probe can see,\n"
-          "  however far apart the medians happen to look.")
+
+    # The validity check. Whichever read happens first in a pair pays to open
+    # the connection, and that cost has measured 10-20x the thing this probe is
+    # trying to see. If it is large, the numbers above are measuring warm-up.
+    second_won = sum(1 for f, s in zip(firsts, seconds) if s < f)
+    print(f"\n  --- validity ---")
+    print(f"  ran first   median {statistics.median(firsts):6.1f}s")
+    print(f"  ran second  median {statistics.median(seconds):6.1f}s  "
+          f"(faster at {second_won}/{len(firsts)} sites)")
+    warm = statistics.median(firsts) / statistics.median(seconds)
+    print(f"  order effect: {warm:.2f}x")
+    if warm > 1.5 or warm < 0.67:
+        print("\n  ORDER DOMINATES. The connection warm-up between the two reads of\n"
+              "  a pair is larger than any difference between the methods, so the\n"
+              "  speedup above is not a measurement of concurrency. This is the\n"
+              "  expected outcome on a high-latency link; run it from a host near\n"
+              "  us-west-2 before drawing a conclusion.")
+    else:
+        print("\n  Order effect is small, so the per-site ratios are worth reading.\n"
+              "  A real effect shows up as most sites landing on the same side of\n"
+              "  1.00, not in the medians.")
     return 0
 
 

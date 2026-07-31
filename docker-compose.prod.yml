@@ -1,0 +1,101 @@
+# Bhoomi production overlay. Applied on top of docker-compose.yml:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+#
+# Everything reaches the internet through Caddy on one domain, so there is no
+# CORS boundary and no mixed content: the browser only ever talks to
+# https://$BHOOMI_DOMAIN.
+#
+#   /                     frontend
+#   /api/*  /health        backend
+#   /ogc/*  /conformance   backend
+#   /docs   /openapi.json  backend
+#   /tiles/*               titiler, prefix stripped
+#
+# **Object storage is a precondition, not an option.** TiTiler opens whatever
+# path its `url` parameter names. While outputs live on a filesystem that makes
+# a reachable tile server an arbitrary-file-read, which is why the dev compose
+# binds it to 127.0.0.1. This overlay exposes tiles through Caddy, so it is only
+# safe once BHOOMI_S3_BUCKET and BHOOMI_S3_PUBLIC_BASE_URL are set and the
+# outputs volume is gone from the tile server -- both of which it enforces
+# below by leaving `volumes:` off titiler entirely. Deploying this without the
+# R2 variables gives a tile server that can read nothing, which is the correct
+# failure: an unhelpful demo rather than an exposed filesystem.
+#
+# See docs/deploy.md.
+
+services:
+  backend:
+    image: bhoomi-backend:prod
+    environment:
+      # Same origin as the frontend, so this is belt-and-braces rather than
+      # load-bearing -- but a wrong value here fails closed, which is right.
+      BHOOMI_CORS_ORIGINS: https://${BHOOMI_DOMAIN}
+      BHOOMI_PUBLIC_BASE_URL: https://${BHOOMI_DOMAIN}
+      BHOOMI_TITILER_URL: https://${BHOOMI_DOMAIN}/tiles
+      # Empty: with object storage there is no shared filesystem for the tile
+      # server to mount, and `tile_source` hands TiTiler an https URL instead.
+      BHOOMI_TILE_ROOT: ""
+      # Exactly one proxy (Caddy) sets X-Forwarded-For. Without this every
+      # request looks like it came from the Docker bridge address and the rate
+      # limiter budgets the whole internet as one client; with it set too high,
+      # a client could forge the header and get a fresh budget per request.
+      BHOOMI_TRUSTED_PROXY_HOPS: "1"
+    volumes: !override []
+    ports: !override []
+
+  worker:
+    image: bhoomi-backend:prod
+    environment:
+      BHOOMI_PUBLIC_BASE_URL: https://${BHOOMI_DOMAIN}
+    volumes: !override []
+
+  titiler:
+    environment:
+      TITILER_API_CORS_ORIGINS: https://${BHOOMI_DOMAIN}
+    # No `volumes:` and no host `ports:`. The overlay cannot mount the outputs
+    # volume back on, and Caddy is the only thing that can reach this service.
+    volumes: !override []
+    ports: !override []
+
+  postgres:
+    # postgis/postgis publishes amd64 only. Oracle Cloud's Always Free tier is
+    # Ampere A1 (arm64), where that image will not start at all -- so this is a
+    # hard swap, not a preference. imresamu/postgis is the multi-arch build of
+    # the same Postgres + PostGIS pairing.
+    #
+    # Override to the official image on an amd64 host if you would rather:
+    #   BHOOMI_POSTGIS_IMAGE=postgis/postgis:16-3.4
+    image: ${BHOOMI_POSTGIS_IMAGE:-imresamu/postgis:16-3.4}
+
+  frontend:
+    build:
+      args:
+        # Same origin, so the browser calls https://domain/api/v1/... and no
+        # CORS preflight ever happens. Baked in at build time by Next.js, so
+        # changing the domain means rebuilding this image, not restarting it.
+        NEXT_PUBLIC_API_URL: https://${BHOOMI_DOMAIN}
+    image: bhoomi-frontend:prod
+    ports: !override []
+
+  caddy:
+    image: caddy:2-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      BHOOMI_DOMAIN: ${BHOOMI_DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # Certificates and ACME account keys. Losing these means re-issuing on
+      # every restart, and Let's Encrypt rate-limits that to five per week.
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  caddy-data:
+  caddy-config:

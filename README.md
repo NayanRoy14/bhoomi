@@ -198,6 +198,14 @@ docker compose up --build
 #  tiles     http://localhost:8001      (loopback only -- see the warning above)
 ```
 
+[**`docs/deploy.md`**](docs/deploy.md) is the production runbook — a public,
+always-on deployment where jobs really run, free, on Oracle Cloud's Always Free tier plus
+Cloudflare R2. It covers the three constraints that rule out the obvious hosts (the worker
+cannot be serverless, Postgres must be PostGIS, Redis must support blocking reads), why the
+worker belongs on the US west coast even though the audience is in India, and the fact that
+**object storage is a precondition rather than an option** — `docker-compose.prod.yml` gives
+the tile server no filesystem at all, which is what makes exposing it safe.
+
 Or without Docker:
 
 ```bash

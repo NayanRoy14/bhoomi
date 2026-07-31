@@ -1,0 +1,48 @@
+# Reverse proxy and TLS for the production stack (docker-compose.prod.yml).
+#
+# Caddy obtains and renews a Let's Encrypt certificate for $BHOOMI_DOMAIN on its
+# own, provided the domain's A record points at this host and ports 80 and 443
+# are open. On Oracle Cloud that means opening them in *two* places -- the VCN
+# security list and the instance's own iptables -- which is the single most
+# common reason a first deploy appears to hang. See docs/deploy.md.
+#
+# Everything is served from one origin deliberately. Splitting the API onto
+# api.<domain> would need a second DNS record and would reintroduce a CORS
+# preflight on every request for no gain.
+
+{$BHOOMI_DOMAIN} {
+	encode zstd gzip
+
+	# --- tiles -------------------------------------------------------------
+	# handle_path strips the /tiles prefix, so /tiles/cog/tiles/... arrives at
+	# TiTiler as /cog/tiles/..., which is the path backend/tiles.py builds
+	# against BHOOMI_TITILER_URL=https://<domain>/tiles.
+	#
+	# This is only safe because the tile server has no filesystem mounted and
+	# reads COGs over https from object storage. Do not add a volume to it.
+	handle_path /tiles/* {
+		reverse_proxy titiler:80
+	}
+
+	# --- API ---------------------------------------------------------------
+	# Every backend-owned path, listed rather than pattern-matched: a stray
+	# route falling through to the frontend would 404 in a way that looks like
+	# the API is down.
+	@api {
+		path /api/* /health /ogc /ogc/* /conformance /docs /docs/* /openapi.json /redoc
+	}
+	handle @api {
+		reverse_proxy backend:8000
+	}
+
+	# --- frontend ----------------------------------------------------------
+	handle {
+		reverse_proxy frontend:3000
+	}
+
+	# A job can run for minutes and the browser polls throughout; the default
+	# read timeout would cut a long download of a large COG.
+	request_body {
+		max_size 2MB
+	}
+}
