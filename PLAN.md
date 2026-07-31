@@ -2279,7 +2279,8 @@ machine was corrected after `allowed_transitions` disagreed with the first draft
 half; `/docs` remains the generated half. Every request and response in it was captured from a
 running stack rather than written from memory, and a check confirms every routed endpoint is
 documented and every documented endpoint is routed
-(FastAPI's OpenAPI plus prose) · `docs/processing.md` explaining the science · installation
+(FastAPI's OpenAPI plus prose) · ~~`docs/processing.md` explaining the science~~ ✅ [`docs/processing.md`](docs/processing.md),
+2026-07-31 — every constant cross-checked against the code by a script · installation
 from clean clone · `docs/limitations.md` — every known weakness, stated plainly.
 
 **Demo:** precompute and pin the Kolkata outputs (§9.3). Record ~90 seconds:
