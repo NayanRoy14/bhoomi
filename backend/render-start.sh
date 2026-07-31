@@ -22,10 +22,27 @@
 #     a redeploy or a spin-down, so a download link is good until then. Object
 #     storage fixes this and nothing else does; see docs/deploy-render.md.
 #
-# Migrations are not run here -- the image's entrypoint has already done that
-# by the time this script starts, and it is the same single container, so there
-# is no race of the kind entrypoint.sh warns about.
+# **Migrations run here, and that is not belt-and-braces.** This script first
+# shipped assuming backend/entrypoint.sh had already applied them, because the
+# Dockerfile sets it as ENTRYPOINT and Render's `dockerCommand` is documented as
+# overriding CMD. It does not behave that way: dockerCommand replaces the
+# entrypoint, so entrypoint.sh never ran, `alembic upgrade head` never ran, and
+# the service came up healthy with no schema. /health passed, scene search
+# passed -- it falls back to querying STAC directly when the cache is
+# unavailable -- and the failure surfaced only on the first job submission, as
+# `relation "jobs" does not exist` behind a 500.
+#
+# `alembic upgrade head` is idempotent, so running it here is safe whether or
+# not the entrypoint also ran. There is no race: this container is the only
+# thing that migrates, because the worker is inside it rather than beside it.
 set -e
+
+if [ -n "$BHOOMI_DATABASE_URL" ]; then
+    echo "render-start: applying migrations"
+    alembic upgrade head
+else
+    echo "render-start: BHOOMI_DATABASE_URL unset -- no scene cache, and jobs will fail"
+fi
 
 # Restart the worker if it dies rather than leaving a live API with a queue
 # nobody is draining -- which looks, from the browser, exactly like a job that

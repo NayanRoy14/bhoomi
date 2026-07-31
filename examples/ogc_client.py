@@ -76,7 +76,25 @@ def post(url: str, body: dict) -> tuple[int, "urllib.request.email.message.Messa
         with urllib.request.urlopen(request, timeout=60) as response:
             return response.status, response.headers, json.loads(response.read())
     except urllib.error.HTTPError as exc:
-        return exc.code, exc.headers, json.loads(exc.read())
+        return exc.code, exc.headers, _body(exc.read())
+
+
+def _body(raw: bytes) -> dict:
+    """Parse an error body, tolerating one that is not JSON.
+
+    Bhoomi's own errors are JSON, so this looked unnecessary until a deployed
+    instance returned a bare `Internal Server Error` in text/plain and this
+    function raised JSONDecodeError from inside the error path -- turning a
+    legible "HTTP 500" into a traceback pointing at the JSON decoder, three
+    frames from anything to do with the actual failure. Anything between the
+    client and the app (a proxy, a load balancer, a platform error page) can
+    produce a non-JSON body, and the moment it does is the moment the message
+    matters most.
+    """
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        return {"detail": raw.decode("utf-8", "replace").strip()[:500] or "(empty body)"}
 
 
 def link_map(document_url: str, document: dict) -> dict[str, str]:
