@@ -53,12 +53,26 @@ services:
       # The STATIC SITE's origin -- scheme included, no trailing slash. Needed
       # because the browser calls the API cross-origin here, unlike the Docker
       # Compose deployment where Caddy puts both behind one host.
+      #
+      # This is the one value that genuinely cannot be resolved automatically,
+      # and it is worth saying why rather than leaving it looking like an
+      # oversight. `fromService` can read another service's *private network*
+      # hostname, which is not the public origin a browser sends, and it does
+      # not support static sites as a source at all. So the API cannot ask
+      # Render what the frontend's public URL is. Read it off the static site's
+      # own page and paste it here.
       - key: BHOOMI_CORS_ORIGINS
         sync: false
-      # THIS service's own URL. It goes into outputs.cog_uri, so it must be
-      # what a client can actually reach.
-      - key: BHOOMI_PUBLIC_BASE_URL
-        sync: false
+
+      # BHOOMI_PUBLIC_BASE_URL is deliberately NOT here. Render sets
+      # RENDER_EXTERNAL_URL automatically in every web service, holding this
+      # service's own public URL with the scheme, and backend/storage.py falls
+      # back to it. Prompting for it meant typing a hostname before the service
+      # existed -- a guess, and a quiet one: a wrong value serves every request
+      # correctly and only publishes a cog_uri that points nowhere.
+      #
+      # Set BHOOMI_PUBLIC_BASE_URL by hand only to override, e.g. a custom
+      # domain in front of Render. Explicit still wins.
 
       # ---- wired automatically ----------------------------------------
       - key: BHOOMI_REDIS_URL

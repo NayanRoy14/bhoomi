@@ -28,10 +28,33 @@ from typing import Iterator, Protocol, runtime_checkable
 
 logger = logging.getLogger(__name__)
 
-#: Where the API is reachable from outside. Used to turn a download route into
-#: an absolute URL, because `cog_uri` has to mean something to a client that is
-#: not the API itself -- TiTiler, or a `gdalinfo /vsicurl/...`.
-PUBLIC_BASE_URL = os.getenv("BHOOMI_PUBLIC_BASE_URL", "http://localhost:8000")
+def _public_base_url() -> str:
+    """Where the API is reachable from outside.
+
+    Used to turn a download route into an absolute URL, because `cog_uri` has
+    to mean something to a client that is not the API itself -- TiTiler, or a
+    `gdalinfo /vsicurl/...`.
+
+    `RENDER_EXTERNAL_URL` is the fallback because a platform that knows its own
+    public URL should not have to be told it. On Render this variable is set
+    automatically in every web service and holds the full URL, scheme included.
+    Deploying there previously meant typing the hostname into the blueprint
+    *before the service existed*, which is a guess -- and a wrong guess here is
+    quiet, because the API works perfectly and only the `cog_uri` it hands out
+    is unreachable.
+
+    Precedence is explicit-then-platform-then-local: an operator who sets
+    BHOOMI_PUBLIC_BASE_URL means it (a custom domain in front of Render, say),
+    and it must win over anything inferred.
+    """
+    for value in (os.getenv("BHOOMI_PUBLIC_BASE_URL"),
+                  os.getenv("RENDER_EXTERNAL_URL")):
+        if value and value.strip():
+            return value.strip()
+    return "http://localhost:8000"
+
+
+PUBLIC_BASE_URL = _public_base_url()
 
 DEFAULT_OUTPUT_DIR = Path(os.getenv("BHOOMI_OUTPUT_DIR", "outputs/jobs"))
 

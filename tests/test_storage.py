@@ -103,6 +103,43 @@ class TestUrls:
         assert "//api" not in storage.download_url("8f3e")
 
 
+class TestPublicBaseUrlResolution:
+    """Where the public base URL comes from when nobody sets it explicitly.
+
+    This matters because a wrong value here fails quietly: the API serves every
+    request correctly and only the `cog_uri` it publishes points nowhere, which
+    surfaces as a broken download long after the deploy looked fine.
+    """
+
+    def test_an_explicit_value_wins(self, monkeypatch):
+        """An operator who sets it means it -- a custom domain, say."""
+        monkeypatch.setenv("BHOOMI_PUBLIC_BASE_URL", "https://bhoomi.example")
+        monkeypatch.setenv("RENDER_EXTERNAL_URL", "https://ignored.onrender.com")
+        assert storage._public_base_url() == "https://bhoomi.example"
+
+    def test_it_falls_back_to_the_platform(self, monkeypatch):
+        """Render sets this automatically, so the URL need not be guessed."""
+        monkeypatch.delenv("BHOOMI_PUBLIC_BASE_URL", raising=False)
+        monkeypatch.setenv("RENDER_EXTERNAL_URL", "https://bhoomi-api.onrender.com")
+        assert storage._public_base_url() == "https://bhoomi-api.onrender.com"
+
+    def test_an_empty_explicit_value_does_not_shadow_the_platform(self, monkeypatch):
+        """Blueprints and compose files supply "" for unset optional vars.
+
+        Treating that as a real value would leave the platform's own correct URL
+        unused in favour of an empty string, and localhost would then be baked
+        into every published cog_uri.
+        """
+        monkeypatch.setenv("BHOOMI_PUBLIC_BASE_URL", "")
+        monkeypatch.setenv("RENDER_EXTERNAL_URL", "https://bhoomi-api.onrender.com")
+        assert storage._public_base_url() == "https://bhoomi-api.onrender.com"
+
+    def test_it_falls_back_to_localhost_off_platform(self, monkeypatch):
+        monkeypatch.delenv("BHOOMI_PUBLIC_BASE_URL", raising=False)
+        monkeypatch.delenv("RENDER_EXTERNAL_URL", raising=False)
+        assert storage._public_base_url() == "http://localhost:8000"
+
+
 class TestFactory:
     def test_the_default_is_local(self):
         storage.set_storage(None)

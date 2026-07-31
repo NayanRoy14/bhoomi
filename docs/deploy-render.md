@@ -55,8 +55,12 @@ Render dashboard → **New** → **Blueprint** → select this repository. It re
 [`render.yaml`](../render.yaml) and proposes three services: `bhoomi-api`
 (Docker web service), `bhoomi` (static frontend) and `bhoomi-queue` (Key Value).
 
-Render will prompt for the four values marked `sync: false`. Three of them are
-URLs of services that do not exist yet.
+Render prompts for the values marked `sync: false`. There are now three, and
+only one of them is a URL of a service that does not exist yet.
+
+`BHOOMI_PUBLIC_BASE_URL` used to be prompted and no longer is: Render sets
+`RENDER_EXTERNAL_URL` automatically in every web service, and the API falls back
+to it. Set it by hand only to override — a custom domain in front of Render, say.
 
 > ⚠️ **Do not guess these, and do not assume the service names survive.**
 > `onrender.com` is one global namespace, so a taken name gets four random
@@ -75,9 +79,14 @@ URLs of services that do not exist yet.
 | Variable | Service | Value |
 |---|---|---|
 | `BHOOMI_DATABASE_URL` | `bhoomi-api` | the Neon pooled string from step 1 |
-| `BHOOMI_PUBLIC_BASE_URL` | `bhoomi-api` | the API service's own URL |
 | `BHOOMI_CORS_ORIGINS` | `bhoomi-api` | the **static site's** URL, exactly — scheme included, no trailing slash |
 | `NEXT_PUBLIC_API_URL` | `bhoomi` | the API service's URL |
+
+`BHOOMI_CORS_ORIGINS` is the one that cannot be automated, and it is worth
+knowing why rather than assuming it was an oversight. `fromService` reads
+another service's *private network* hostname, which is not the public origin a
+browser sends, and it does not accept a static site as a source at all — so the
+API has no way to ask Render what the frontend's public URL is.
 
 Changing `BHOOMI_CORS_ORIGINS` restarts the API, which takes about a minute.
 **Changing `NEXT_PUBLIC_API_URL` requires a redeploy of the frontend, not a
