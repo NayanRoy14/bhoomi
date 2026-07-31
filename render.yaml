@@ -81,14 +81,62 @@ services:
           type: keyvalue
           property: connectionString
 
-      # ---- fixed ------------------------------------------------------
-      # Empty disables tiles: the API returns `tiles: null` and the UI says
-      # there is no map preview rather than offering a link that 404s. There is
-      # no free tile server here, and exposing one over an ephemeral local disk
-      # would be an arbitrary-file-read -- see the warning in README.md.
-      # Set this, plus the S3 variables, once an R2 bucket exists.
+      # ---- Cloudflare R2 (D14) ----------------------------------------
+      #
+      # All five are prompted rather than defaulted, and the deployment works
+      # with all five left blank: `get_storage` selects S3Storage on the
+      # presence of BHOOMI_S3_BUCKET alone, so an empty bucket name keeps the
+      # local-disk behaviour this blueprint shipped with.
+      #
+      # Setting them is what fixes the ephemeral disk (D5): a COG in R2
+      # outlives a redeploy, a spin-down and the container itself.
+      - key: BHOOMI_S3_BUCKET
+        sync: false
+      # R2's S3 endpoint, WITH scheme:
+      #   https://<account-id>.r2.cloudflarestorage.com
+      - key: BHOOMI_S3_ENDPOINT
+        sync: false
+      - key: BHOOMI_S3_ACCESS_KEY_ID
+        sync: false
+      - key: BHOOMI_S3_SECRET_ACCESS_KEY
+        sync: false
+      # The bucket's PUBLIC base, which is a different host from the endpoint
+      # above -- an r2.dev address or a custom domain.
+      #
+      # This one decides the shape of the whole deployment, so it is worth
+      # knowing what setting it means. With it, `url_for` returns a stable
+      # public URL, `cog_uri` points straight at R2, downloads stop passing
+      # through the API, and the tile server needs no credentials. Without it
+      # the bucket is private, `url_for` returns None, and every download and
+      # every tile is streamed by a 0.1 CPU API container instead.
+      #
+      # Public also means public: anyone with the URL reads the object. That is
+      # already true of `/download`, which is anonymous by design (PLAN.md 1.4),
+      # so this publishes nothing that was not already served.
+      - key: BHOOMI_S3_PUBLIC_BASE_URL
+        sync: false
+
+      # ---- tiles --------------------------------------------------------
+      #
+      # The public origin of `bhoomi-tiles`, scheme included, no trailing
+      # slash. Left blank the API returns `tiles: null` and the UI says there
+      # is no map preview rather than offering a link that 404s.
+      #
+      # Prompted rather than read with `fromService` for the same reason
+      # BHOOMI_CORS_ORIGINS is: `fromService` yields the private network
+      # hostname, and this URL is one the *browser* fetches. A private hostname
+      # here would leave the API healthy and every tile request failing in the
+      # client.
+      #
+      # Do not set this before BHOOMI_S3_PUBLIC_BASE_URL. Tiles over local disk
+      # would need the tile server to share a filesystem with the API, and a
+      # publicly reachable TiTiler with a filesystem is an arbitrary-file-read
+      # -- which is exactly why docker-compose.yml binds it to 127.0.0.1 and
+      # why `bhoomi-tiles` below is given no disk at all.
       - key: BHOOMI_TITILER_URL
-        value: ""
+        sync: false
+
+      # ---- fixed ------------------------------------------------------
       # Render terminates TLS and forwards exactly one X-Forwarded-For hop.
       # Without this every request looks like it came from Render's proxy and
       # the whole internet shares one rate-limit budget.
@@ -128,6 +176,76 @@ services:
       # not a restart. Set it to the API service's URL.
       - key: NEXT_PUBLIC_API_URL
         sync: false
+
+  # -------------------------------------------------------------- tiles
+  #
+  # TiTiler, rendering the COGs in R2 as XYZ tiles (PLAN.md 11). Optional: the
+  # rest of the deployment works without it and the UI degrades to "no map
+  # preview", which is why it is last in the file and why nothing else
+  # references it.
+  #
+  # **It is given no disk, and that is the security property, not an economy.**
+  # TiTiler opens whatever `?url=` it is handed. With a filesystem attached and
+  # a public hostname that is an arbitrary-file-read, which is why
+  # docker-compose.yml binds it to 127.0.0.1. Reading COGs over https from a
+  # public R2 bucket removes the filesystem from the picture entirely rather
+  # than mitigating it -- there is no local path for a crafted url to name.
+  #
+  # The residual exposure is honest to state: this is still a public service
+  # that will fetch a URL you give it, so it can be pointed at someone else's
+  # GeoTIFF and used as a renderer for it. The extension allowlist below is the
+  # only lever the image offers; it does not restrict the host. What limits the
+  # damage is that there is nothing private to reach -- no volume, no
+  # credentials, and no private network peer that serves anything.
+  - name: bhoomi-tiles
+    type: web
+    runtime: image
+    image:
+      # Pinned, not `latest`. A floating tag on a public deployment means the
+      # renderer can change under a README that shows its output.
+      url: ghcr.io/developmentseed/titiler:2.2.1
+    plan: free
+    # Singapore rather than Oregon -- the opposite of the API, on purpose.
+    #
+    # The worker belongs next to the Sentinel-2 COGs in AWS us-west-2 because
+    # it waits on S3. A tile server waits on nothing: it reads from R2, which
+    # Cloudflare serves from an edge close to wherever it is asked, and then
+    # answers a browser in India across many small requests where round trips
+    # are the whole cost. So this one belongs near the audience.
+    region: singapore
+    # TiTiler's own liveness endpoint. Without it Render health-checks `/`,
+    # which TiTiler answers with its landing page -- fine, but slower and it
+    # would not notice a broken raster stack.
+    healthCheckPath: /healthz
+    envVars:
+      # The static site's origin, same value as the API's BHOOMI_CORS_ORIGINS.
+      # The browser fetches tiles directly from this service, so its CORS
+      # headers matter as much as the API's.
+      - key: TITILER_API_CORS_ORIGINS
+        sync: false
+      # Same GDAL tuning as the backend and compose: without it a windowed read
+      # becomes a slow scan, and a tile server issues a great many windowed
+      # reads. This is the difference between a map that pans and one that
+      # crawls, on an instance with 0.1 CPU to spare.
+      - key: GDAL_DISABLE_READDIR_ON_OPEN
+        value: EMPTY_DIR
+      - key: GDAL_HTTP_MULTIPLEX
+        value: "YES"
+      - key: VSI_CACHE
+        value: "TRUE"
+      - key: VSI_CACHE_SIZE
+        value: "67108864"
+      # Refuse to open anything that is not a GeoTIFF. Narrow, but it is the
+      # one restriction the image supports, and it turns "fetch any URL" into
+      # "fetch any URL that ends in .tif".
+      - key: CPL_VSIL_CURL_ALLOWED_EXTENSIONS
+        value: ".tif,.TIF,.tiff"
+      # No AWS_* credentials here, deliberately. They would only be needed for
+      # a PRIVATE bucket, read over /vsis3 -- and a public bucket is what lets
+      # this service hold no secret at all. If you make the bucket private,
+      # this service needs the key pair and the GDAL endpoint variables from
+      # docker-compose.yml, and it stops being a service whose compromise costs
+      # nothing.
 
 # ------------------------------------------------------------- queue
   - name: bhoomi-queue
