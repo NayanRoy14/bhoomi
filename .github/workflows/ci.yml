@@ -75,7 +75,10 @@ jobs:
           cache: pip
           cache-dependency-path: requirements.txt
 
-      - name: Install
+      - name: Install runtime dependencies only
+        # Deliberately not requirements-dev.txt. The gate below must run with
+        # nothing but what the production image has, so it stays usable inside
+        # a container or a deploy check rather than only on a dev machine.
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
@@ -86,6 +89,10 @@ jobs:
         # cannot be flaky -- the whole point is that it fails only when the
         # resolver's behaviour changes.
         run: python -m probes.verify_offset_rule
+
+      - name: Add the test runner
+        # Only now, so the step above proved the runtime-only property.
+        run: pip install pytest
 
       - name: The harmonization unit tests, called out by name
         run: python -m pytest tests/test_harmonize.py -p no:warnings
