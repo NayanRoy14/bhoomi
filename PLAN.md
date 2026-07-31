@@ -816,7 +816,25 @@ scene, so it is not free.
 > **UX gap found 2026-07-31.** The change picker offers only scenes from the *current* search,
 > and §8 caps a search at 366 days. So the flagship 2020↔2026 comparison **cannot be expressed in
 > the web interface at all** — only through the API. Either the picker needs its own search, or
-> the date cap needs to not apply to it. Not fixed.
+> the date cap needs to not apply to it.
+>
+> ✅ **Fixed 2026-07-31 — the picker got its own search.** Of the two options, this is the one
+> that costs nothing: §8's cap exists to bound *catalogue query cost*, and it still does, because
+> each of the two searches is independently capped at 366 days. Only the interval between them is
+> free — which is the thing that was never meant to be limited. Relaxing the cap instead would
+> have widened every search to buy one feature.
+>
+> The comparison window is seeded from the primary one with the year moved back and **day-of-year
+> preserved**, because §5.4.4 wants both dates in the same part of the year; the user can edit it.
+> It searches at a looser cloud limit than the primary panel (40 % against 20 %): a second date is
+> scarcer than a first, and a partly cloudy scene the user can see and reject beats an empty list —
+> the valid-pixel fraction on the result then says what masking actually cost.
+>
+> Verified end to end against the running stack: a 2020..2026 *single* search is still refused
+> (HTTP 400), while the pair drawn from two separate searches submits (HTTP 202) and completes.
+> On the D13 AOI the result reproduces the recorded demo figures exactly — loss 9.747 %, gain
+> 3.264 %, asymmetry 2.99, mean −0.0274 — which also confirms §5.3.1c's detector replacement did
+> not move them.
 
 ## 5.4 The four analyses
 

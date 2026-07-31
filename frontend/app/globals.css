@@ -349,13 +349,54 @@ kbd {
   color: var(--muted);
 }
 
-.analysis select {
+.analysis select,
+.analysis input[type="date"] {
   font: inherit;
   color: var(--text);
   background: var(--panel-2);
   border: 1px solid var(--border);
   border-radius: 6px;
   padding: 8px 12px;
+}
+
+/* The change picker's own search. Set apart because it is a search inside a
+   panel that is otherwise about submitting, and running one is a step the user
+   should see as separate from running the job. */
+.analysis .subsearch {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px 12px;
+  margin: 4px 0 12px;
+  background: var(--panel-2);
+}
+
+.analysis .subsearch legend {
+  font-size: 12px;
+  color: var(--muted);
+  padding: 0 6px;
+}
+
+.analysis .subsearch .dates {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.analysis .subsearch button {
+  width: 100%;
+  margin-top: 8px;
+  font: inherit;
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px;
+  cursor: pointer;
+}
+
+.analysis .subsearch button:disabled {
+  opacity: 0.55;
+  cursor: default;
 }
 
 .analysis .primary {

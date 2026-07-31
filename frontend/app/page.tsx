@@ -119,6 +119,8 @@ export default function Page() {
           aoi={aoi}
           scene={selectedScene}
           scenes={scenes}
+          searchStart={startDate}
+          searchEnd={endDate}
           onOutput={setOutput}
           opacity={opacity}
           onOpacity={setOpacity}

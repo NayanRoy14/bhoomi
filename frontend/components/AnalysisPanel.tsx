@@ -55,11 +55,34 @@ function formatDate(iso: string): string {
   });
 }
 
+/** Sentinel-2 L2A is not usefully available before this. */
+const ARCHIVE_START_YEAR = 2016;
+
+/** How far back the comparison window is offered by default. */
+const DEFAULT_LOOKBACK_YEARS = 6;
+
+/**
+ * The same calendar window, some years earlier.
+ *
+ * Day-of-year is preserved deliberately: 5.4.4 wants the two dates in the same
+ * part of the year, because a March/September pair measures the season as much
+ * as the land. Only the year moves.
+ */
+function shiftYears(iso: string, years: number): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "";
+  const year = Math.max(date.getFullYear() - years, ARCHIVE_START_YEAR);
+  return `${year}-${iso.slice(5)}`;
+}
+
 interface Props {
   aoi: Polygon | null;
   scene: Scene | null;
   /** Every scene from the search, so change detection can pick its second date. */
   scenes: Scene[];
+  /** The primary search window, used to seed the comparison window. */
+  searchStart: string;
+  searchEnd: string;
   onOutput: (output: Output | null) => void;
   opacity: number;
   onOpacity: (value: number) => void;
@@ -69,6 +92,8 @@ export default function AnalysisPanel({
   aoi,
   scene,
   scenes,
+  searchStart,
+  searchEnd,
   onOutput,
   opacity,
   onOpacity,
@@ -81,6 +106,22 @@ export default function AnalysisPanel({
   const [estimate, setEstimate] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+
+  // The comparison date gets its own search.
+  //
+  // 8 caps a *single* search at 366 days, to bound catalogue query cost. The
+  // change picker used to offer only scenes from the primary search, so the
+  // cap became a cap on the GAP between the two dates -- which made this
+  // project's own flagship comparison, 2020 against 2026, impossible to express
+  // in the interface at all. It was API-only.
+  //
+  // Searching twice fixes that without weakening anything: each query is still
+  // bounded, and only the interval between them is free.
+  const [compareStart, setCompareStart] = useState("");
+  const [compareEnd, setCompareEnd] = useState("");
+  const [compareScenes, setCompareScenes] = useState<Scene[] | null>(null);
+  const [compareSearching, setCompareSearching] = useState(false);
+  const [compareError, setCompareError] = useState<string | null>(null);
 
   // The interval must not outlive the component or the job; a stray poll after
   // unmount sets state on a dead tree, and after completion it is pure noise.
@@ -99,9 +140,13 @@ export default function AnalysisPanel({
   const offered = available.length > 0 ? [...available, "change"] : available;
 
   const needsTwo = sceneCount(process) === 2;
+  // Candidates come from the comparison search once one has been run, and from
+  // the primary search otherwise -- so comparing two dates inside one search
+  // still works without the extra step.
+  const pool = compareScenes ?? scenes;
   // Only scenes that fully cover the AOI can be the second date, and a scene
   // cannot be differenced against itself.
-  const candidates = scenes.filter(
+  const candidates = pool.filter(
     (s) => s.id !== scene?.id && s.aoi_coverage >= 0.999,
   );
   const compare = candidates.find((s) => s.id === compareId) ?? null;
@@ -155,6 +200,51 @@ export default function AnalysisPanel({
       setCompareId(null);
     }
   }, [candidates, compareId]);
+
+  // Seed the comparison window from the primary one, day-of-year preserved.
+  // Only while untouched: re-seeding after the user has edited it would undo
+  // their choice every time the primary search changed.
+  useEffect(() => {
+    if (compareScenes !== null || compareStart || compareEnd) return;
+    if (!searchStart || !searchEnd) return;
+    setCompareStart(shiftYears(searchStart, DEFAULT_LOOKBACK_YEARS));
+    setCompareEnd(shiftYears(searchEnd, DEFAULT_LOOKBACK_YEARS));
+  }, [searchStart, searchEnd, compareScenes, compareStart, compareEnd]);
+
+  async function searchCompare() {
+    if (!aoi) return;
+    setCompareSearching(true);
+    setCompareError(null);
+    setCompareId(null);
+    try {
+      const result = await api.searchScenes({
+        aoi,
+        start_date: compareStart || undefined,
+        end_date: compareEnd || undefined,
+        // Deliberately not the primary search's cloud limit. A second date is
+        // scarcer than a first -- there may be only one usable scene in the
+        // window -- and a partly cloudy one the user can see and reject beats
+        // an empty list. The valid-pixel fraction on the result says what the
+        // masking actually cost.
+        max_cloud: 40,
+      });
+      setCompareScenes(result.scenes);
+      if (result.scenes.filter((s) => s.aoi_coverage >= 0.999).length === 0) {
+        setCompareError(
+          result.count === 0
+            ? "No scenes in that window. Try widening it or moving it."
+            : "Scenes exist in that window but none covers your whole area.",
+        );
+      }
+    } catch (err) {
+      setCompareScenes(null);
+      setCompareError(
+        err instanceof ApiError ? err.message : "Could not search for a second date.",
+      );
+    } finally {
+      setCompareSearching(false);
+    }
+  }
 
   function reset() {
     stopPolling();
@@ -276,6 +366,36 @@ export default function AnalysisPanel({
             </select>
           </label>
 
+          <fieldset className="subsearch" disabled={isRunning(job)}>
+            <legend>Find the second date</legend>
+            <p className="muted small">
+              Its own search, so the two dates can be years apart. Each search
+              still covers at most a year.
+            </p>
+            <div className="dates">
+              <label className="field">
+                <span>From</span>
+                <input
+                  type="date"
+                  value={compareStart}
+                  onChange={(e) => setCompareStart(e.target.value)}
+                />
+              </label>
+              <label className="field">
+                <span>To</span>
+                <input
+                  type="date"
+                  value={compareEnd}
+                  onChange={(e) => setCompareEnd(e.target.value)}
+                />
+              </label>
+            </div>
+            <button onClick={searchCompare} disabled={!aoi || compareSearching}>
+              {compareSearching ? "Searching…" : "Search this window"}
+            </button>
+            {compareError && <p className="error small">{compareError}</p>}
+          </fieldset>
+
           <label className="field">
             <span>Compare against</span>
             <select
@@ -293,10 +413,17 @@ export default function AnalysisPanel({
             </select>
           </label>
 
-          {candidates.length === 0 && (
+          {candidates.length > 0 && (
+            <p className="muted small">
+              {candidates.length} candidate{candidates.length === 1 ? "" : "s"} from{" "}
+              {compareScenes === null ? "the main search" : "the window above"}.
+            </p>
+          )}
+
+          {candidates.length === 0 && compareScenes === null && (
             <p className="warn small">
-              No other scene in this search covers your whole area. Widen the date
-              range to find a second date.
+              No other scene in the main search covers your whole area. Search a
+              window above to find one — it can be any year.
             </p>
           )}
 
