@@ -222,6 +222,8 @@ account.
 | Job fails with a memory error | 512 MB shared between API and worker. Reduce the AOI; the fit is roughly 6.8 MB per megapixel. |
 | Download 404s that worked earlier | Expected. Ephemeral disk, and the service restarted. This is the one that needs R2. |
 | First request of the day hangs ~40 s | Expected. Free-tier spin-up. |
+| `429 rate_limited` after 3 jobs in an hour | Deliberate. `BHOOMI_JOB_LIMIT` is 3 on this tier because it is half of what bounds the R2 bill — see the arithmetic in [`render.yaml`](../render.yaml). Raise it there, not in the dashboard: the service is blueprint-managed and a dashboard edit is overwritten on the next sync. |
+| `Output is 62 MB; the maximum is 50 MB` | `BHOOMI_MAX_OUTPUT_MB` is 50 here, against a measured ~20 MB for a 500 km² NDVI COG. Hitting it means something is far larger than the AOI cap should allow — worth understanding before raising it. |
 
 ## Making it better later, cheapest first
 

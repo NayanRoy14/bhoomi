@@ -142,9 +142,31 @@ services:
       # the whole internet shares one rate-limit budget.
       - key: BHOOMI_TRUSTED_PROXY_HOPS
         value: "1"
-      # Tighter than the defaults: this is 0.1 CPU shared with the API.
+      # ---- the two numbers that actually bound the R2 bill ----------------
+      #
+      # R2's free tier is 10 GB of storage, and Cloudflare has **no hard spend
+      # cap** -- a budget alert reports, it does not stop. The bucket's
+      # 30-day lifecycle rule bounds how long an object lives, not how fast
+      # objects arrive. So the real ceiling is these two multiplied together,
+      # and it is worth writing the arithmetic down rather than rediscovering
+      # it from an invoice.
+      #
+      # Worst case from a single IP, sustained for a day:
+      #
+      #     jobs/hour x 24 x max output size
+      #     5 x 24 x 200 MB = 24 GB/day   <- what this used to allow
+      #     3 x 24 x  50 MB = 3.6 GB/day  <- what it allows now
+      #
+      # Both numbers stay comfortably above real use. PLAN.md 8 measures a
+      # 500 km2 NDVI COG at ~20 MB (940 KB at 23 km2, 1.37 MB at 33 km2), and
+      # 500 km2 is the AOI cap -- so 50 MB is still 2.5x the largest output
+      # the API will accept a request for, and refuses only the runaway case.
+      # Three jobs an hour is enough to try every process once and compare two
+      # dates; it is not enough to fill a bucket.
       - key: BHOOMI_JOB_LIMIT
-        value: "5"
+        value: "3"
+      - key: BHOOMI_MAX_OUTPUT_MB
+        value: "50"
       - key: BHOOMI_SEARCH_LIMIT
         value: "60"
       # A job on 0.1 CPU is slower than the 600 s default assumes.
