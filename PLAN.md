@@ -1733,8 +1733,44 @@ If the hand-computed number disagrees with the README's, **the README is what ch
 account of the project narrowing its own claim four times is its strongest asset, and it is
 public — correcting it in the open is what keeps it worth something.
 
-**Exit criterion:** ~~O1 and O2 answered in writing~~ ✅ — remaining: an NDVI raster of Kolkata
-made by hand in QGIS that you can explain, and the Bhoonidhi request submitted with a date.
+### Done, 2026-08-01 — and the numbers are Nayan's now
+
+Both dates computed by hand in QGIS 3.44 LTR, from `probes/prepare_qgis_handcheck.py`'s clipped
+bands, with `DN / 10000` and no offset subtracted:
+
+| | hand-computed in QGIS | independently computed | agreement |
+|---|---|---|---|
+| 2026 | 0.310661233102956 | +0.310661233 | 9 decimals |
+| 2020 | 0.3379507614407582 | +0.337950761 | 9 decimals |
+
+The 2026 figure is now confirmed three ways — the deployed API returned a mean of 0.31080 over
+the larger D13 AOI with SCL masking applied, `probes/verify_demo_offset.py` measured +0.3107, and
+the hand-check agrees with both. **"You must see the number before you automate the number" is
+satisfied** — though not in that order. The checklist wanted this done "before any code exists";
+it happened two days after the pipeline was built and one day after the repository went public.
+The ordering it asked for is the stronger version and was lost. What survives is the part that
+still had teeth: the published figures were checked by hand against the pixels, and they held.
+
+### The rule above needs one qualifier, learned the same afternoon
+
+The first 2020 attempt returned **0.3009**, a 0.037 disagreement — and the rule as written says
+the README changes. It should not have. The expression had `2020_nir` against **`2026_red`**: one
+of four band references left on the wrong year when the 2026 expression was duplicated and
+edited. Cross-date NDVI between a 2020 NIR and a 2026 red band is physically meaningless and
+still returns 0.3009, which is in range, plausible for this AOI, and close enough to the target
+to read as a real finding rather than a slip.
+
+That is the same shape as the failure §5.3 exists to prevent: **a confident wrong answer that
+looks entirely reasonable.** So the rule stands, with a precondition — *verify the hand-check
+before acting on its disagreement.* Reproduce the discrepant number from the same files by an
+independent path first. Here that meant computing all twelve ordered band pairings and looking
+for the one that returned 0.30091626 — which identified the slip exactly, to nine decimals,
+rather than by guessing at likely causes. Had the rule been applied as written, a correct README
+would have been "corrected" to match a mistake.
+
+**Exit criterion:** ~~O1 and O2 answered in writing~~ ✅ · ~~an NDVI raster of Kolkata made by
+hand in QGIS that you can explain~~ ✅ **2026-08-01** — remaining: the Bhoonidhi request
+submitted with a date.
 
 ---
 
