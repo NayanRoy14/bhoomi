@@ -1697,16 +1697,36 @@ under D3. Two details that are easy to get wrong and both change the answer:
   baselines — `_1_` is **05.00**, `_0_` is **02.14** — and `deduplicate_by_acquisition` keeps
   the highest, so `_1_` is the scene the pipeline actually reads. 2026 has only one, at
   baseline 05.12.
-- **Therefore both scenes carry the BOA offset, and QGIS will not apply it for you.** Baseline
-  ≥ 04.00 stores reflectance with −1000 folded in, so it is `(DN − 1000) / 10000`, not
-  `DN / 10000` (§5.3). Skip it and NDVI comes out wrong in a way that still looks entirely
-  plausible.
+- **Use `DN / 10000` on both scenes. Do not subtract 1000.** Both carry baseline ≥ 04.00, and
+  the instinct that follows — "≥ 04.00 means the −1000 is folded into these pixels" — is wrong
+  for these files, which is the whole subject of §5.3. Earth Search's COGs have the correction
+  **already applied**: `earthsearch:boa_offset_applied: True` means *"we did it for you"*, not
+  *"go and do it"* (§5.3, "What the flag actually means", measured 2026-07-30 on these two
+  scenes). Their DN floors, at the decimation `measure_offset_floor_in_scene` uses, are **228**
+  and **203** DN, and an offset-bearing product cannot reach a floor below 800 — so
+  `processing/harmonize.py` resolves both to offset-absent on pixel evidence, overriding the
+  flag it does not need. The 48-scene calibration set already carries the 2026 scene with
+  `"truth": "absent"` and `"oob_present": 0.814`: the repository had recorded, in a file the
+  CI gate reads, that assuming the offset is present puts 81 % of this scene's values out of
+  bounds.
 
-  Note what the table in §5.3 already says about this exact scene: **a 2020 acquisition
-  carrying baseline 05.00.** Reasoning "it is from 2020, so it predates the 2022 offset" is
-  the specific error that produces a silent cross-date bias — the product was reprocessed, and
-  the baseline follows the reprocessing, not the overpass. Nor does the flag settle it:
-  §5.3 records `earthsearch:boa_offset_applied` being wrong on real scenes in both directions.
+  Subtracting anyway is not a subtle error, and it is worth knowing what it looks like so you
+  recognise it if you see it. Measured over the D13 AOI:
+
+  | | mean NDVI | \|NDVI\| > 1 | negative reflectance |
+  |---|---|---|---|
+  | `DN / 10000` — correct | 2026 **+0.311**, 2020 **+0.338** | 0.00 % | 0.0 % |
+  | `(DN − 1000) / 10000` | 2026 +1.147, 2020 +1.373 | 57 % / 65 % | 38 % / 43 % |
+
+  The +0.311 is the same number the deployed API returns for this scene (mean 0.31080), so a
+  correct hand-check agrees with Bhoomi to three decimals. The wrong one announces itself:
+  NDVI above 1 is arithmetically impossible for non-negative bands, so if the raster calculator
+  gives you values outside [−1, 1], you subtracted an offset that was not there.
+
+  The reasoning trap in the other direction is still live and still worth stating: **a 2020
+  acquisition carries baseline 05.00**, so "it is from 2020, it predates the 2022 offset" is
+  right by accident here and wrong as a rule — the product was reprocessed, and the baseline
+  follows the reprocessing, not the overpass. Neither the date nor the baseline decides.
   Measure the DN floor, as `processing/harmonize.py` does.
 
 If the hand-computed number disagrees with the README's, **the README is what changes.** That
