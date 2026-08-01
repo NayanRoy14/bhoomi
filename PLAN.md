@@ -1683,10 +1683,35 @@ mission and product levels (L1C vs L2A) · NDVI/NDWI/NDBI physical meaning.
 - [x] ~~Validate the demo AOI actually shows change~~ — done 2026-07-30. Real vegetation loss
       confirmed with a 3:1 loss/gain asymmetry, and SCL found to overstate it 4×. → **§5.4.4**
 
-**Learn-by-doing, now with concrete targets:** open `S2A_45QXE_20200310_1_L2A` and
-`S2B_45QXE_20260304_0_L2A` in QGIS, compute NDVI on each with the raster calculator, and
+**Learn-by-doing, now with concrete targets:** open `S2A_45QXF_20200310_1_L2A` and
+`S2B_45QXF_20260304_0_L2A` in QGIS, compute NDVI on each with the raster calculator, and
 difference them. That is the flagship demo, done by hand, before any code exists. **You must
 see the number before you automate the number.**
+
+*Scene ids corrected 2026-08-01, verified against Earth Search.* They read `45QXE` until then,
+left behind when D11 moved the demo to 45QXF the same day it was written — 45QXE's top edge is
+22.604 N and the AOI runs to 22.68, so those scenes cover 38 % of it and the API rejects them
+under D3. Two details that are easy to get wrong and both change the answer:
+
+- **Take `_1_` for 2020, not `_0_`.** They are the same overpass at different processing
+  baselines — `_1_` is **05.00**, `_0_` is **02.14** — and `deduplicate_by_acquisition` keeps
+  the highest, so `_1_` is the scene the pipeline actually reads. 2026 has only one, at
+  baseline 05.12.
+- **Therefore both scenes carry the BOA offset, and QGIS will not apply it for you.** Baseline
+  ≥ 04.00 stores reflectance with −1000 folded in, so it is `(DN − 1000) / 10000`, not
+  `DN / 10000` (§5.3). Skip it and NDVI comes out wrong in a way that still looks entirely
+  plausible.
+
+  Note what the table in §5.3 already says about this exact scene: **a 2020 acquisition
+  carrying baseline 05.00.** Reasoning "it is from 2020, so it predates the 2022 offset" is
+  the specific error that produces a silent cross-date bias — the product was reprocessed, and
+  the baseline follows the reprocessing, not the overpass. Nor does the flag settle it:
+  §5.3 records `earthsearch:boa_offset_applied` being wrong on real scenes in both directions.
+  Measure the DN floor, as `processing/harmonize.py` does.
+
+If the hand-computed number disagrees with the README's, **the README is what changes.** That
+account of the project narrowing its own claim four times is its strongest asset, and it is
+public — correcting it in the open is what keeps it worth something.
 
 **Exit criterion:** ~~O1 and O2 answered in writing~~ ✅ — remaining: an NDVI raster of Kolkata
 made by hand in QGIS that you can explain, and the Bhoonidhi request submitted with a date.
