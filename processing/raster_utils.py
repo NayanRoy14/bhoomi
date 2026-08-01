@@ -56,8 +56,17 @@ def configure_gdal() -> None:
 
 
 def utm_crs_for(lon: float, lat: float) -> CRS:
-    """Return the UTM CRS containing a point. Kolkata resolves to EPSG:32645."""
-    zone = int((lon + 180.0) / 6.0) + 1
+    """Return the UTM CRS containing a point. Kolkata resolves to EPSG:32645.
+
+    The zone is clamped to 1-60, and the upper clamp is load-bearing rather
+    than defensive. `lon = 180.0` computes zone 61 and EPSG:32661 -- which is
+    not an error, because 32661 is a real code: **WGS 84 / UPS North**, polar
+    stereographic. So the antimeridian silently returned a polar projection for
+    a tropical point, and every area and grid derived from it would have been
+    wrong with nothing raised. 180 E and 180 W are the same meridian and both
+    belong to zone 60.
+    """
+    zone = min(max(int((lon + 180.0) / 6.0) + 1, 1), 60)
     epsg = (32600 if lat >= 0 else 32700) + zone
     return CRS.from_epsg(epsg)
 

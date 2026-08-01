@@ -1,6 +1,7 @@
 """Tests for the STAC catalogue client. No network -- the transport is stubbed."""
 
 import json
+from datetime import datetime, timezone
 
 import pytest
 
@@ -225,6 +226,54 @@ class TestDeduplication:
         a["properties"]["grid:code"] = b["properties"]["grid:code"] = "MGRS-45QXE"
         kept = deduplicate_by_acquisition([Scene.from_stac_item(a), Scene.from_stac_item(b)])
         assert [s.id for s in kept] == ["S2A_45QXE_20200330_1_L2A"]
+
+    def test_millisecond_drift_collapses_across_a_second_boundary(self):
+        """The same 1 ms drift, landing either side of a whole second.
+
+        Grouping used to key on the timestamp truncated to the second, which
+        absorbs the drift everywhere except here: `...25.9995` and `...26.0005`
+        are one millisecond apart and truncate to 25 and 26, so both versions
+        survived and reached the caller. They differ by up to +-3900 DN, so a
+        user could pick the older baseline off the list, or a change job could
+        pair one date's new baseline against another's old one -- the exact
+        Sen2Cor drift de-duplication exists to keep out.
+
+        Truncation does not remove the seam, it moves it. A tolerance has none.
+        """
+        from catalogue.earthsearch import deduplicate_by_acquisition
+
+        a = item("S2A_45QXF_20200310_0_L2A", geometry=TILE_45QXF, baseline="02.14",
+                 when="2020-03-10T04:52:25.999500Z")
+        b = item("S2A_45QXF_20200310_1_L2A", geometry=TILE_45QXF, baseline="05.00",
+                 when="2020-03-10T04:52:26.000500Z")
+        a["properties"]["grid:code"] = b["properties"]["grid:code"] = "MGRS-45QXF"
+        kept = deduplicate_by_acquisition([Scene.from_stac_item(a), Scene.from_stac_item(b)])
+        assert [s.id for s in kept] == ["S2A_45QXF_20200310_1_L2A"]
+
+    def test_a_tolerance_does_not_chain_into_one_cluster(self):
+        """Each scene is compared to its cluster's first member, not its last.
+
+        Comparing against the previous one would let a run of near-adjacent
+        timestamps merge across an unbounded span, collapsing genuinely
+        distinct acquisitions. Five scenes 0.6 s apart span 2.4 s and must not
+        become one.
+        """
+        from datetime import timedelta
+
+        from catalogue.earthsearch import ACQUISITION_TOLERANCE, deduplicate_by_acquisition
+
+        step = ACQUISITION_TOLERANCE * 0.6
+        base = datetime(2020, 3, 10, 4, 52, 25, tzinfo=timezone.utc)
+        scenes = []
+        for i in range(5):
+            when = (base + step * i).isoformat().replace("+00:00", "Z")
+            entry = item(f"c{i}", geometry=TILE_45QXF, baseline="05.00", when=when)
+            entry["properties"]["grid:code"] = "MGRS-45QXF"
+            scenes.append(Scene.from_stac_item(entry))
+
+        kept = deduplicate_by_acquisition(scenes)
+        assert len(kept) == 3, [s.id for s in kept]
+        assert timedelta(0) < step < ACQUISITION_TOLERANCE
 
     def test_grid_code_separates_tiles_from_the_same_overpass(self):
         """Adjacent tiles are seconds apart; grid:code keeps them distinct."""

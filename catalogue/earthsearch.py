@@ -15,6 +15,8 @@ import logging
 import time
 import urllib.error
 import urllib.request
+from collections import defaultdict
+from datetime import timedelta
 
 from .base import Catalogue, CatalogueError, Scene, SceneNotFoundError, SearchQuery
 
@@ -154,34 +156,61 @@ def deduplicate_by_acquisition(scenes: list[Scene]) -> list[Scene]:
     random, and two such picks across dates would put a Sen2Cor version change
     inside a change-detection result. Preferring the newest baseline makes the
     choice deterministic and keeps a series internally consistent.
+
+    **Grouped by tolerance rather than by a truncated timestamp.** This keyed on
+    the timestamp truncated to the second, which absorbs the observed 1 ms drift
+    everywhere except across a second boundary: `…25.9995` and `…26.0005` are
+    the same millisecond apart and truncate to 25 and 26, so the pair survived
+    de-duplication and both versions reached the caller. Truncation does not
+    remove a seam, it moves it. A tolerance has no seam.
     """
-    best: dict[tuple, Scene] = {}
+    groups: dict[tuple, list[Scene]] = defaultdict(list)
     for scene in scenes:
-        key = _acquisition_key(scene)
-        current = best.get(key)
-        if current is None or _baseline_sort_key(scene) > _baseline_sort_key(current):
-            best[key] = scene
-    return sorted(best.values(), key=lambda s: s.acquired_at, reverse=True)
+        groups[_grid_key(scene)].append(scene)
+
+    kept: list[Scene] = []
+    for group in groups.values():
+        group.sort(key=lambda s: s.acquired_at)
+        cluster: list[Scene] = []
+        for scene in group:
+            # Compared against the cluster's FIRST member, not its previous
+            # one. Chaining would let a run of scenes 1 ms apart merge across
+            # an arbitrarily long span -- a whole day of acquisitions could
+            # collapse into one. Anchoring bounds every cluster to one
+            # tolerance wide.
+            if cluster and scene.acquired_at - cluster[0].acquired_at > ACQUISITION_TOLERANCE:
+                kept.append(max(cluster, key=_baseline_sort_key))
+                cluster = []
+            cluster.append(scene)
+        if cluster:
+            kept.append(max(cluster, key=_baseline_sort_key))
+
+    return sorted(kept, key=lambda s: s.acquired_at, reverse=True)
 
 
-def _acquisition_key(scene: Scene) -> tuple:
-    """Identify one acquisition across reprocessings.
+#: How far apart two timestamps may sit and still be one acquisition.
+#:
+#: Measured 2026-07-30: reprocessed versions of the same acquisition can carry
+#: timestamps **one millisecond apart** --
+#:
+#:     S2A_45QXE_20200330_0_L2A  04:52:25.488000Z
+#:     S2A_45QXE_20200330_1_L2A  04:52:25.489000Z
+#:
+#: -- while the 45QXF pair from the same overpass has identical timestamps.
+#: A second is far below the ~5 day revisit and far above the observed drift.
+ACQUISITION_TOLERANCE = timedelta(seconds=1)
 
-    Measured 2026-07-30: reprocessed versions of the same acquisition can carry
-    timestamps **one millisecond apart** --
 
-        S2A_45QXE_20200330_0_L2A  04:52:25.488000Z
-        S2A_45QXE_20200330_1_L2A  04:52:25.489000Z
+def _grid_key(scene: Scene) -> tuple:
+    """The spatial half of an acquisition's identity.
 
-    -- so an exact-timestamp key silently fails to collapse them, while the
-    45QXF pair from the same overpass has identical timestamps and does
-    collapse. Truncating to the second absorbs that drift.
-
-    The MGRS grid square is a far better spatial identifier than the bbox, which
-    can shift between reprocessings as nodata masking changes.
+    The MGRS grid square is a far better spatial identifier than the bbox,
+    which can shift between reprocessings as nodata masking changes.
     """
-    grid = scene.properties.get("grid:code") or tuple(round(v, 3) for v in scene.bbox)
-    return (grid, scene.acquired_at.replace(microsecond=0))
+    return (scene.properties.get("grid:code")
+            or tuple(round(v, 3) for v in scene.bbox),)
+
+
 
 
 def _baseline_sort_key(scene: Scene) -> tuple[int, int]:
