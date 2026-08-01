@@ -43,6 +43,16 @@ class RateLimiter(Protocol):
     def check(self, key: str) -> tuple[bool, int]:
         """Return (allowed, retry_after_seconds). Records the hit when allowed."""
 
+    def release(self, key: str) -> None:
+        """Give back one recorded hit, for work that was charged but refused.
+
+        The job budget (PLAN.md 8) is meant to bound *work performed*, and a
+        submission that never became a job performed none. Without this, being
+        told "you already have a job running" costs one of twenty for the hour,
+        so the user pays again when they retry after that job finishes -- a
+        budget spent entirely on being refused.
+        """
+
     def reset(self) -> None:
         ...
 
@@ -76,6 +86,21 @@ class SlidingWindowLimiter(RateLimiter):
 
             hits.append(now)
             return True, 0
+
+    def release(self, key: str) -> None:
+        """Drop the newest recorded hit for this key, if there is one.
+
+        Newest rather than the caller's own: under concurrency the hit popped
+        may belong to a different in-flight request from the same key. That is
+        harmless here, because a sliding window counts hits rather than
+        identifies them -- one is given back either way, and both requests are
+        spending the same budget. Tracking which timestamp belonged to whom
+        would cost a token per request to make the log identical.
+        """
+        with self._lock:
+            hits = self._hits.get(key)
+            if hits:
+                hits.pop()
 
     def _prune(self, now: float) -> None:
         """Drop keys with no recent hits, so idle clients do not accumulate.
