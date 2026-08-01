@@ -9,14 +9,14 @@ returns a standards-compliant raster product that another GIS tool can consume.
 
 Draw an area, search Sentinel-2, run an index, download the GeoTIFF. No sign-up.
 
-> ⚠️ **Early development, and deployed on a free tier** — which is visible in how it behaves.
+> ⚠️ **Early development, and deployed on a free tier** — which is visible in one place.
 > The API **sleeps after 15 minutes**, so the first request takes about 40 seconds; it has not
-> crashed. There is **no tile server**, so the map preview is absent and the UI says so rather
-> than offering a dead link. Results themselves are durable: they go to **Cloudflare R2** and
-> stay for 30 days, so a download link keeps working after the API sleeps.
+> crashed. Everything else is whole: results go to **Cloudflare R2** and stay for 30 days, so a
+> download link keeps working after the API sleeps, and the map preview renders from a tile
+> server of its own.
 >
-> None of those are properties of Bhoomi; they are what a deployment with no payment method
-> costs. [`docs/deploy-render.md`](docs/deploy-render.md) explains each and what fixes it, and
+> That is not a property of Bhoomi; it is what a deployment with no payment method
+> costs. [`docs/deploy-render.md`](docs/deploy-render.md) explains it and what fixes it, and
 > [`docs/deploy.md`](docs/deploy.md) is the deployment without the compromises.
 > See [Status](#status). Development runs August 2026 – March 2027.
 
@@ -142,7 +142,7 @@ three wrong answers to reach — see [below](#a-note-on-the-hard-part).
 | PostGIS scene caching + alembic | **Working** — write-through on search, 39 tests |
 | Job queue — Redis + RQ, worker, state machine | **Working** |
 | NDVI / NDWI / NDBI as jobs, COG out | **Working** — verified on live Sentinel-2 |
-| TiTiler — results rendered on the map | **Working** locally; **not deployed** — see below |
+| TiTiler — results rendered on the map | **Working** — deployed, reading COGs from R2; see below |
 | Object storage — Cloudflare R2 | **Working** — live bucket, 30-day retention; job outputs and `/download` both serve from it |
 | Two-date change detection | **Working** — with baseline and seasonality warnings |
 | Before/after swipe | **Working** — a change job publishes both dates as well as the difference |
@@ -171,9 +171,10 @@ visually would measure the stretch rather than the ground.
 > ⚠️ **The tile server is bound to `127.0.0.1` in local compose on purpose.** While outputs live
 > on a filesystem, TiTiler will open whatever path it is given, so a publicly reachable tile
 > server is an arbitrary-file-read. Object storage removes this rather than mitigating it, which
-> is why the deployed tile service in `render.yaml` is given no disk at all and reads `https`
-> objects from R2 — there is no local path a crafted `?url=` can name. That precondition is now
-> met; the service is defined but not yet synced, which is why the deployment has no map preview.
+> is why the deployed tile service is given no disk at all and reads `https` objects from R2 —
+> there is no local path a crafted `?url=` can name. It is still a public service that will fetch
+> a `.tif` you hand it; what bounds the damage is that it holds no credentials and can reach
+> nothing private.
 
 Outputs go to local disk by default and to object storage when `BHOOMI_S3_BUCKET` is set.
 `cog_uri` is a URL either way. On local disk the worker and the API must share a filesystem;
