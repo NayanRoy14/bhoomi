@@ -17,6 +17,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from backend.api.main import app
+from backend.api.routes import ogc
 from backend.db.jobs import JobStatus
 from backend.queue import processes
 from tests.conftest import needs_db
@@ -138,6 +139,36 @@ class TestProcessDescription:
         """They are published, so a client reading only the description sees them."""
         outputs = bare.get("/ogc/processes/change").json()["outputs"]
         assert "earlier_index" in outputs and "later_index" in outputs
+
+    @pytest.mark.parametrize("process,output_types,expected", [
+        ("ndvi", ["index_raster"], {"ndvi"}),
+        ("ndbi", ["index_raster"], {"ndbi"}),
+        ("change", ["change_raster", "earlier_ndvi", "later_ndvi"],
+         {"change", "earlier_index", "later_index"}),
+        # The index is a run parameter, so a different one must still map onto
+        # the same declared ids -- that is the whole reason they are generic.
+        ("change", ["change_raster", "earlier_ndbi", "later_ndbi"],
+         {"change", "earlier_index", "later_index"}),
+    ])
+    def test_results_use_the_identifiers_the_description_declared(
+            self, bare, process, output_types, expected):
+        """The property that was missing, and the defect it let through.
+
+        Both halves were tested and both passed: the description declared
+        `earlier_index`, the change process wrote `earlier_ndvi`, and nothing
+        checked that they were the same string. So `/ogc/jobs/{id}/results`
+        returned two ids that had never been advertised while the two that had
+        were never returned -- in an API whose landing page claims Part 1: Core
+        conformance, where the description is the client's only way to know
+        what a job will produce.
+        """
+        declared = set(bare.get(f"/ogc/processes/{process}").json()["outputs"])
+        produced = {ogc.output_id_for(process, t) for t in output_types}
+
+        assert produced == expected
+        assert produced <= declared, (
+            f"results would return {sorted(produced - declared)}, which "
+            f"/ogc/processes/{process} never declared")
 
     def test_async_only_is_declared_honestly(self, bare):
         for p in bare.get("/ogc/processes").json()["processes"]:

@@ -208,6 +208,44 @@ _AOI_SCHEMA = {
 }
 
 
+#: The two sides of a change job, in chronological order.
+_SIDES = ("earlier", "later")
+
+
+def _side_output_id(side: str) -> str:
+    """The declared output identifier for one side of a change job.
+
+    Deliberately **not** the storage `output_type`. A per-date row is written as
+    `earlier_ndvi` / `later_ndbi`, because the index is a run parameter — but a
+    process description is static, written before any job exists, so it cannot
+    name the index. It has to advertise a stable identifier.
+
+    This function exists so the description and the results document cannot
+    drift: they were written separately and did, the description advertising
+    `earlier_index` while results returned `earlier_ndvi`. A client that reads
+    the description to learn what outputs to expect — the only reason the
+    description exists — found neither of the ids it was promised. The specific
+    index stays discoverable through the result's `title`.
+    """
+    return f"{side}_index"
+
+
+def output_id_for(process: str, output_type: str) -> str:
+    """Map a stored `outputs.output_type` to its declared output identifier.
+
+    The inverse direction of `_side_output_id`, and the single place that
+    knows the mapping. `..._raster` is named for the process that produced it
+    (`index_raster` from an `ndvi` job is just `ndvi`), and the per-date
+    rasters collapse to the side identifiers the description declares.
+    """
+    if output_type.endswith("_raster"):
+        return process
+    for side in _SIDES:
+        if output_type.startswith(f"{side}_"):
+            return _side_output_id(side)
+    return output_type
+
+
 def _describe(spec) -> ProcessDescription:
     """The full description, including input and output schemas."""
     inputs: dict[str, Any] = {
@@ -265,8 +303,8 @@ def _describe(spec) -> ProcessDescription:
     if spec.name == "change":
         # The two sides of the difference are published too, and a client that
         # only reads the description should know they exist.
-        for side in ("earlier", "later"):
-            outputs[f"{side}_index"] = {
+        for side in _SIDES:
+            outputs[_side_output_id(side)] = {
                 "title": f"{side.capitalize()} date index raster",
                 "description": (
                     f"The {side} of the two dates, as its own COG. A difference "
@@ -472,9 +510,10 @@ def job_results(job_id: str, request: Request,
     base = str(request.base_url).rstrip("/")
     results: dict[str, Any] = {}
     for output in jobs.outputs_for(job.id):
-        # `change_raster` is named for the process it came from; the others
-        # already carry the index in their name.
-        key = job.process if output.output_type.endswith("_raster") else output.output_type
+        # The identifier the process description declared, never the storage
+        # `output_type` — see `output_id_for`. Returning an id that was never
+        # advertised is the defect this replaced.
+        key = output_id_for(job.process, output.output_type)
         variant = ("?output=earlier" if output.output_type.startswith("earlier_")
                    else "?output=later" if output.output_type.startswith("later_")
                    else "")
