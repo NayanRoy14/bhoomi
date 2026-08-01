@@ -6,6 +6,7 @@ import logging
 
 from fastapi import APIRouter, Depends
 
+from backend import tiles
 from backend.api import errors, schemas
 from backend.api.deps import get_catalogue, get_scene_store
 from backend.db import SceneStore
@@ -30,6 +31,49 @@ def _thumbnail(scene: Scene) -> str | None:
     return None
 
 
+def _aoi_bounds(geometry: dict) -> tuple[float, float, float, float] | None:
+    coords = [c for ring in geometry.get("coordinates", []) for c in ring]
+    if not coords:
+        return None
+    xs, ys = [c[0] for c in coords], [c[1] for c in coords]
+    return min(xs), min(ys), max(xs), max(ys)
+
+
+def _overlap(a: tuple[float, float, float, float],
+             b: tuple[float, float, float, float]
+             ) -> tuple[float, float, float, float] | None:
+    """The shared rectangle of two bboxes, or None if they do not meet.
+
+    The preview is cut from the *overlap* rather than from the AOI, because a
+    partially covering scene is shown in the list too (`aoi_coverage` < 1).
+    Cropping such a scene to the full AOI would ask TiTiler for ground the COG
+    does not contain, and the preview would come back mostly nodata -- which
+    reads as "this scene is broken" when the honest message is "this scene
+    covers the left third of what you drew".
+    """
+    minx, miny = max(a[0], b[0]), max(a[1], b[1])
+    maxx, maxy = min(a[2], b[2]), min(a[3], b[3])
+    if minx >= maxx or miny >= maxy:
+        return None
+    return minx, miny, maxx, maxy
+
+
+def _preview(scene: Scene, aoi_bbox: tuple[float, float, float, float] | None) -> str | None:
+    """An AOI-sized crop where possible, the whole-tile JPEG otherwise.
+
+    Falls back rather than failing: with no tile server configured, or a scene
+    carrying no `visual` asset, the old thumbnail is still better than a blank
+    row. See `tiles.preview_url` for why the crop is worth having.
+    """
+    if aoi_bbox is not None:
+        window = _overlap(aoi_bbox, tuple(scene.bbox))
+        if window is not None:
+            cropped = tiles.preview_url(scene.assets.get("visual"), window)
+            if cropped:
+                return cropped
+    return _thumbnail(scene)
+
+
 @router.post("/search", response_model=schemas.SceneSearchResponse,
              summary="Find satellite scenes covering an area and date range")
 def search_scenes(
@@ -45,6 +89,7 @@ def search_scenes(
     silently disappear.
     """
     aoi = request.aoi.as_dict()
+    aoi_bbox = _aoi_bounds(aoi)
 
     area_km2 = raster_utils.geometry_area_km2(aoi)
     if area_km2 > schemas.MAX_AOI_KM2:
@@ -93,7 +138,7 @@ def search_scenes(
                 processing_baseline=s.processing_baseline,
                 bbox=list(s.bbox),
                 geometry=s.geometry,
-                thumbnail=_thumbnail(s),
+                thumbnail=_preview(s, aoi_bbox),
                 aoi_coverage=round(s.aoi_coverage(aoi), 4),
                 available_processes=_available_processes(s),
             )

@@ -90,6 +90,69 @@ def render_key(process: str, output_type: str | None = None) -> str:
     return process
 
 
+#: TiTiler's COG part endpoint (verified against 2.2.1's factory.py). Crops to a
+#: bbox given in `coord-crs`, which defaults to EPSG:4326 -- the CRS a STAC bbox
+#: is already in, so no reprojection is needed on our side.
+BBOX_PATH = "/cog/bbox/{minx},{miny},{maxx},{maxy}.png"
+
+#: Longest edge of a scene preview, in pixels.
+#:
+#: Sized against the box it lands in rather than against the sensor. `.thumb` in
+#: globals.css is 62x62 with `object-fit: cover`, so 256 is already 4x the CSS
+#: pixels and 2x a retina panel -- and the search list requests one of these per
+#: scene, each one a fresh set of range reads across the Pacific on an instance
+#: with 0.1 CPU. Measured on a live TiTiler: 256 is about 35 KB against 115 KB
+#: at 512, for a picture nobody sees at either size.
+#:
+#: Over the Rajarhat demo AOI this is still roughly 72 m per pixel against the
+#: STAC thumbnail's 320 m, and unlike the thumbnail it gets *sharper* as the AOI
+#: gets smaller, because the same budget covers less ground. That relationship
+#: is the fix; the exact number is a tradeoff and safe to raise if the UI ever
+#: shows these larger than a list row.
+PREVIEW_MAX_SIZE = 256
+
+
+def preview_url(visual_href: str | None, bbox: tuple[float, float, float, float] | None
+                ) -> str | None:
+    """A preview of just the AOI, cut from the scene's 10 m true-colour COG.
+
+    **Why this exists.** Sentinel-2's STAC `thumbnail` asset is a 343x343 JPEG
+    of the *entire* tile, which is about 110 km across -- roughly 320 m per
+    pixel. It does not know about the AOI, so the smaller the area someone
+    draws, the smaller the fraction of that image their area occupies: the
+    Rajarhat demo AOI lands on about 54x45 of those pixels, and a 2 km box on
+    a handful. Measured, not estimated -- the numbers are from the asset itself.
+
+    The `visual` asset is the same scene as a 10 m three-band uint8 TCI COG.
+    Cropping it to the AOI gives a picture whose resolution is set by how much
+    ground was asked for rather than by how big the tile happens to be, which
+    inverts the relationship: a smaller AOI now looks *better*, not worse.
+
+    No `rescale` and no `colormap_name`: TCI is already 8-bit display-ready RGB,
+    unlike the index rasters `tiles_url` serves. Passing a rescale here would
+    stretch a correct image into a wrong one.
+
+    Returns None when there is no tile server or no `visual` asset, and the
+    caller falls back to the JPEG. A preview is cosmetic -- it must never be the
+    reason a search fails.
+    """
+    if not TITILER_URL or not visual_href or bbox is None:
+        return None
+
+    minx, miny, maxx, maxy = bbox
+    # A degenerate bbox would make TiTiler read a zero-width window and 500.
+    if not (maxx > minx and maxy > miny):
+        return None
+
+    path = BBOX_PATH.format(minx=f"{minx:.6f}", miny=f"{miny:.6f}",
+                            maxx=f"{maxx:.6f}", maxy=f"{maxy:.6f}")
+    return (
+        f"{TITILER_URL.rstrip('/')}{path}"
+        f"?url={quote(visual_href, safe='')}"
+        f"&max_size={PREVIEW_MAX_SIZE}"
+    )
+
+
 def tiles_url(process: str, source: str | None) -> str | None:
     """An XYZ template for this output, or None if tiles are unavailable.
 
