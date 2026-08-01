@@ -69,10 +69,23 @@ const DEFAULT_LOOKBACK_YEARS = 6;
  * as the land. Only the year moves.
  */
 function shiftYears(iso: string, years: number): string {
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return "";
-  const year = Math.max(date.getFullYear() - years, ARCHIVE_START_YEAR);
-  return `${year}-${iso.slice(5)}`;
+  // Read the year off the string rather than through a Date.
+  //
+  // `new Date("2026-01-01")` is parsed as UTC midnight, but `getFullYear()`
+  // reports local time -- so anywhere west of UTC that instant is still 2025,
+  // and a six-year lookback from 1 January returned 2019-01-01 instead of
+  // 2020-01-01. Silently: the user got a comparison window a year off, in a
+  // tool whose entire purpose is comparing across years. The month and day
+  // were already being taken from the string, so the Date was doing nothing
+  // but supplying a timezone bug.
+  //
+  // The input is `type="date"`, which is always YYYY-MM-DD, so matching that
+  // exactly is also a stricter guard than the old NaN check -- which accepted
+  // "2026" and then sliced it into nonsense.
+  const parts = /^(\d{4})-(\d{2}-\d{2})$/.exec(iso);
+  if (!parts) return "";
+  const year = Math.max(Number(parts[1]) - years, ARCHIVE_START_YEAR);
+  return `${year}-${parts[2]}`;
 }
 
 interface Props {
@@ -135,12 +148,26 @@ export default function AnalysisPanel({
   const [compareSearching, setCompareSearching] = useState(false);
   const [compareError, setCompareError] = useState<string | null>(null);
 
-  // The interval must not outlive the component or the job; a stray poll after
+  // The poll must not outlive the component or the job; a stray poll after
   // unmount sets state on a dead tree, and after completion it is pure noise.
-  const timer = useRef<ReturnType<typeof setInterval> | null>(null);
+  //
+  // A self-scheduling timeout rather than setInterval, because the callback is
+  // async and setInterval does not wait for it. 7.4's 2 s cadence against this
+  // deployment's 30-60 s cold start (docs/deploy-render.md) meant a submission
+  // to a sleeping service fired ~20 overlapping status requests before the
+  // first returned -- a burst against the poll budget, and worse, responses
+  // that can land out of order and walk `progress` backwards. Scheduling the
+  // next poll only once the previous has resolved makes 2 s the gap between
+  // polls rather than the gap between their *starts*.
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  //: Bumped by every stop. An in-flight poll compares against the generation
+  //: it started in and abandons its result if that no longer matches, which is
+  //: what stops a response arriving after unmount or after a new submission.
+  const generation = useRef(0);
   const stopPolling = useCallback(() => {
+    generation.current += 1;
     if (timer.current) {
-      clearInterval(timer.current);
+      clearTimeout(timer.current);
       timer.current = null;
     }
   }, []);
@@ -318,9 +345,14 @@ export default function AnalysisPanel({
         completed_at: null,
       });
 
-      timer.current = setInterval(async () => {
+      const run = generation.current;
+      const poll = async () => {
         try {
           const latest = await api.getJob(created.job_id);
+          // The await above can outlive this run: the component may have
+          // unmounted, or the user may have submitted again. Applying a stale
+          // response would resurrect a job the user has moved on from.
+          if (generation.current !== run) return;
           setJob(latest);
           if (isTerminal(latest.status)) {
             stopPolling();
@@ -329,16 +361,25 @@ export default function AnalysisPanel({
             } else {
               setError(latest.error_message ?? `Job ${latest.status.replace("_", " ")}.`);
             }
+            return;
           }
         } catch (err) {
+          if (generation.current !== run) return;
           // A transient poll failure should not kill the run -- the job is
           // still going on the server. Only stop if the job itself is gone.
           if (err instanceof ApiError && err.status === 404) {
             stopPolling();
             setError(err.message);
+            return;
           }
         }
-      }, POLL_MS);
+        // Reschedule only after the previous poll has settled, so a slow
+        // response delays the next request instead of racing it.
+        if (generation.current === run) {
+          timer.current = setTimeout(poll, POLL_MS);
+        }
+      };
+      timer.current = setTimeout(poll, POLL_MS);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Could not submit the job.");
     } finally {
