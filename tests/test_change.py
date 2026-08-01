@@ -76,6 +76,18 @@ class TestGrid:
     def test_southern_hemisphere_uses_327xx(self):
         assert utm_crs_for(88.36, -22.57).to_epsg() == 32745
 
+    def test_the_antimeridian_stays_in_utm(self):
+        """180 E computed zone 61 -> EPSG:32661, which is not an error code.
+
+        32661 is WGS 84 / UPS North, a polar stereographic CRS -- so a point on
+        the antimeridian silently got a polar projection, and every area and
+        grid derived from it would have been wrong with nothing raised. Both
+        ends of the meridian belong to zone 60.
+        """
+        assert utm_crs_for(180.0, 22.5).to_epsg() == 32660
+        assert utm_crs_for(-180.0, 22.5).to_epsg() == 32601
+        assert utm_crs_for(180.0, -22.5).to_epsg() == 32760
+
     def test_origin_is_snapped_to_resolution(self):
         grid = grid_for_aoi((88.35, 22.55, 88.52, 22.68), resolution=10.0)
         left, bottom, _, top = grid.bounds()
