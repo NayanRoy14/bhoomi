@@ -11,9 +11,9 @@ Draw an area, search Sentinel-2, run an index, download the GeoTIFF. No sign-up.
 
 > ⚠️ **Early development, and deployed on a free tier** — which is visible in how it behaves.
 > The API **sleeps after 15 minutes**, so the first request takes about 40 seconds; it has not
-> crashed. Downloads live on an **ephemeral disk**, so a result link stops working after a
-> restart — download it while you are there. There is **no tile server**, so the map preview is
-> absent and the UI says so rather than offering a dead link.
+> crashed. There is **no tile server**, so the map preview is absent and the UI says so rather
+> than offering a dead link. Results themselves are durable: they go to **Cloudflare R2** and
+> stay for 30 days, so a download link keeps working after the API sleeps.
 >
 > None of those are properties of Bhoomi; they are what a deployment with no payment method
 > costs. [`docs/deploy-render.md`](docs/deploy-render.md) explains each and what fixes it, and
@@ -142,11 +142,11 @@ three wrong answers to reach — see [below](#a-note-on-the-hard-part).
 | PostGIS scene caching + alembic | **Working** — write-through on search, 39 tests |
 | Job queue — Redis + RQ, worker, state machine | **Working** |
 | NDVI / NDWI / NDBI as jobs, COG out | **Working** — verified on live Sentinel-2 |
-| TiTiler — results rendered on the map | **Working** — loopback only, see below |
-| Object storage — Cloudflare R2 | **Implemented**, verified against MinIO; needs a real bucket |
+| TiTiler — results rendered on the map | **Working** locally; **not deployed** — see below |
+| Object storage — Cloudflare R2 | **Working** — live bucket, 30-day retention; job outputs and `/download` both serve from it |
 | Two-date change detection | **Working** — with baseline and seasonality warnings |
 | Before/after swipe | **Working** — a change job publishes both dates as well as the difference |
-| CI — tests, migrations, harmonization gate | **Working** — 5 jobs, integration runs all 418 tests with no skips |
+| CI — tests, migrations, harmonization gate | **Working** — 5 jobs; a bare clone runs 351 and skips 111, integration runs all 462 with no skips |
 | OGC API – Processes Part 1: Core | **Working** — `examples/ogc_client.py` executes and downloads by following links from the landing page |
 | Public deployment | **Live**, free tier — [site](https://bhoomi-site.onrender.com), [API docs](https://bhoomi-api.onrender.com/docs). Verified by driving the browser end to end and by `ogc_client.py`; see the note at the top for what the free tier costs. |
 
@@ -168,16 +168,18 @@ Tiles are rescaled to a fixed [-1, 1] rather than stretched per image. A per-ima
 better and means less — two dates of the same area would get different scales, so comparing them
 visually would measure the stretch rather than the ground.
 
-> ⚠️ **The tile server is bound to `127.0.0.1` on purpose.** While outputs live on a filesystem,
-> TiTiler will open whatever path it is given, so a publicly reachable tile server is an
-> arbitrary-file-read. Object storage removes this rather than mitigating it. Do not expose the
-> tile server before that lands.
+> ⚠️ **The tile server is bound to `127.0.0.1` in local compose on purpose.** While outputs live
+> on a filesystem, TiTiler will open whatever path it is given, so a publicly reachable tile
+> server is an arbitrary-file-read. Object storage removes this rather than mitigating it, which
+> is why the deployed tile service in `render.yaml` is given no disk at all and reads `https`
+> objects from R2 — there is no local path a crafted `?url=` can name. That precondition is now
+> met; the service is defined but not yet synced, which is why the deployment has no map preview.
 
 Outputs go to local disk by default and to object storage when `BHOOMI_S3_BUCKET` is set.
 `cog_uri` is a URL either way. On local disk the worker and the API must share a filesystem;
 object storage removes that constraint.
 
-418 tests. 105 of them need Postgres, Redis or an S3-compatible store, and skip without:
+462 tests. 111 of them need Postgres, Redis or an S3-compatible store, and skip without:
 
 ```bash
 docker run -d --rm --name bhoomi-test-pg -p 55432:5432 \
@@ -278,7 +280,7 @@ processing/   pure raster library -- no web dependencies, importable from a note
   cog.py          COG writing, validation, provenance tags
 examples/     worked analyses over Kolkata
 probes/       measurement scripts -- every empirical claim in PLAN.md is re-runnable
-tests/        418 tests; 105 need Postgres, Redis or S3, the rest need nothing
+tests/        462 tests; 111 need Postgres, Redis or S3, the rest need nothing
 docs/         limitations.md -- what Bhoomi cannot tell you; Bhoonidhi access request
 PLAN.md       the full project plan, with a live decisions register
 ```
