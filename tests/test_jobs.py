@@ -516,6 +516,33 @@ class TestSubmission:
         assert resp.status_code == 429
         assert resp.headers["Retry-After"] == "5"
 
+    def test_a_refused_submission_does_not_spend_the_job_budget(self, api):
+        """PLAN.md 8's budget bounds work performed, and a refusal performs none.
+
+        The charge is taken before the catalogue round trip -- that is what
+        bounds those -- so it has to be given back when nothing is created.
+        Otherwise being told "that AOI crosses a scene boundary" costs one of
+        twenty for the hour, and a user correcting their polygon pays for every
+        attempt at getting it right.
+        """
+        from backend.api import ratelimit
+
+        # A budget of 2, so three refusals would exhaust it if they were
+        # charged. At the default of 20 this test passes either way.
+        original = ratelimit.get_job_limiter()
+        ratelimit.set_job_limiter(ratelimit.SlidingWindowLimiter(limit=2, window=3600))
+        far = {"type": "Polygon", "coordinates": [[[70.0, 10.0], [70.05, 10.0],
+                                                   [70.05, 10.05], [70.0, 10.05],
+                                                   [70.0, 10.0]]]}
+        try:
+            for _ in range(3):
+                assert submit(api, aoi=far).status_code == 400
+
+            # Refused three times over a budget of two, and a real job still fits.
+            assert submit(api).status_code == 202
+        finally:
+            ratelimit.set_job_limiter(original)
+
     def test_a_failed_enqueue_fails_the_job_rather_than_stranding_it(self, api,
                                                                     monkeypatch):
         from backend.queue import connection as queue_connection

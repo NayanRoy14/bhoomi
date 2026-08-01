@@ -241,3 +241,40 @@ class TestOgcPollingBudget:
 
         assert not is_poll(self._get("/ogc/processes"))
         assert not is_poll(self._get("/conformance"))
+
+
+class TestRelease:
+    """A charge that did not buy a job is given back (PLAN.md 8).
+
+    The budget bounds work performed. Being told "you already have a job
+    running" performs none, and without a refund the user paid for the refusal
+    and pays again when they retry after that job finishes.
+    """
+
+    def test_release_gives_back_one_hit(self):
+        limiter = ratelimit.SlidingWindowLimiter(limit=2, window=60)
+        assert limiter.check("a")[0] is True
+        assert limiter.check("a")[0] is True
+        assert limiter.check("a")[0] is False
+
+        limiter.release("a")
+        assert limiter.check("a")[0] is True, "the refunded slot was not reusable"
+
+    def test_release_of_an_unknown_key_is_a_no_op(self):
+        limiter = ratelimit.SlidingWindowLimiter(limit=1, window=60)
+        limiter.release("never-seen")
+        assert limiter.check("never-seen")[0] is True
+
+    def test_release_does_not_go_negative(self):
+        """Repeated refunds must not bank credit against a future burst."""
+        limiter = ratelimit.SlidingWindowLimiter(limit=1, window=60)
+        for _ in range(5):
+            limiter.release("a")
+        assert limiter.check("a")[0] is True
+        assert limiter.check("a")[0] is False
+
+    def test_release_is_scoped_to_its_key(self):
+        limiter = ratelimit.SlidingWindowLimiter(limit=1, window=60)
+        limiter.check("a")
+        limiter.release("b")
+        assert limiter.check("a")[0] is False, "b's refund must not free a's slot"
