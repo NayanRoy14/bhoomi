@@ -36,11 +36,31 @@ def _live_workers(connection) -> int:
     match the registry sets (`rq:workers`, `rq:workers:<queue>`), whose next
     character is "s" rather than ":".
 
-    This trades a persistent undercount for a brief overcount, which is the
-    better error: a stopped worker's key lingers until it expires, measured at
-    ~10 s of TTL against ~435 s for a live one, so a restart shows the old and
-    new workers together for a few seconds and then settles. Wrong for seconds
-    and self-correcting beats wrong until the next deploy.
+    This trades a persistent undercount for a temporary overcount, which is the
+    better error: the key expires on its own, so the number settles without
+    anyone intervening. Wrong for a while and self-correcting beats wrong until
+    the next deploy.
+
+    **How long "temporary" is depends on how the old worker went away, and the
+    two cases are far apart.** A clean local restart is quick: the worker exits
+    gracefully, RQ shortens the key's TTL, and it clears in ~10 s against the
+    ~435 s a live worker refreshes. A platform deploy is not, because the old
+    instance is not stopped -- Render keeps it serving until the new one passes
+    its health check, so for the length of that overlap *both* workers really
+    are alive and both are heartbeating. The count is then correct rather than
+    wrong, and it stays high until the old instance is drained and its key runs
+    out the live TTL.
+
+    Observed on the Render free tier on 2026-08-01, after the blueprint sync
+    that added the tile service: `workers: 2` across four checks where
+    render-start.sh starts one, settling to 1 later. Sampling was too sparse to
+    time it -- somewhere between fifteen and forty minutes -- so treat this as
+    "minutes, not seconds" rather than as a figure.
+
+    The operational consequence is the point: on a hosted deploy, give this
+    number tens of minutes to settle before reading it as a fault. Two workers
+    on a 512 MB container would be worth chasing; two workers because a deploy
+    has not finished draining is not.
     """
     return sum(1 for _ in connection.scan_iter(match="rq:worker:*", count=100))
 
