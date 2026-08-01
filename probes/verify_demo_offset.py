@@ -22,6 +22,7 @@ README and you need to find out which side is wrong.
 
 from __future__ import annotations
 
+import functools
 import sys
 from pathlib import Path
 
@@ -34,6 +35,11 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from processing import harmonize  # noqa: E402
+
+#: Each band read here can take minutes on a slow link (PLAN.md 8 records a 27x
+#: spread on the same read), and block-buffered output makes that indistinguishable
+#: from a hang when stdout is redirected to a file. Flush as we go.
+print = functools.partial(print, flush=True)  # noqa: A001
 
 ITEM = "https://earth-search.aws.element84.com/v1/collections/sentinel-2-l2a/items/"
 
